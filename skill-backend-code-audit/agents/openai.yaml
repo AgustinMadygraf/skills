@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Backend Code Audit"
+  short_description: "Audita seguridad API y performance en FastAPI"
+  default_prompt: "Use $skill-backend-code-audit to audit src/ backend code for FastAPI API security and performance risks, and write actionable findings in docs/todo.md."
+
+policy:
+  allow_implicit_invocation: true

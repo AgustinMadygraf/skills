@@ -1,0 +1,7 @@
+interface:
+  display_name: "todo-workflow"
+  short_description: "Workflow de procesamiento AUTOMATIZADO de tareas pendientes. Ejecuta ..."
+  default_prompt: "Use $todo-workflow to execute its specialized workflow."
+
+policy:
+  allow_implicit_invocation: true

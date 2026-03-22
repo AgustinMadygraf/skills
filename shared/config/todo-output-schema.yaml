@@ -1,0 +1,28 @@
+version: 1
+target_file: "docs/todo.md"
+entry:
+  title:
+    required: true
+    example: "[alta] Validar CORS en endpoint /api/orders"
+  skill_origin:
+    required: true
+    example: "skill-backend-code-audit"
+  severity:
+    required: true
+    allowed: ["critica", "alta", "media", "baja"]
+  location:
+    required: true
+    example: "src/api/orders.py:87"
+  risk:
+    required: true
+  impact:
+    required: true
+  evidence:
+    required: true
+  recommendation:
+    required: true
+  acceptance_criteria:
+    required: true
+notes:
+  - "Usar formato markdown compatible con checklist de todo-workflow."
+  - "Si no existe linea exacta, informar solo archivo."

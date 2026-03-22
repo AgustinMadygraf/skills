@@ -1,0 +1,7 @@
+interface:
+  display_name: "Clean Architecture Orchestrator"
+  short_description: "Audita Arquitectura Limpia, separa certezas/dudas y orquesta decision-helper + todo-workflow"
+  default_prompt: "Use $clean-architecture-orchestrator to audit Clean Architecture in src/, write certainties to docs/todo.md, write doubts to docs/decision/questions.md, then run decision-helper followed by todo-workflow."
+
+policy:
+  allow_implicit_invocation: true

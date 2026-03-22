@@ -1,0 +1,39 @@
+version: 1
+governed_skills:
+  - clean-architecture-orchestrator
+  - decision-helper
+  - docs-maintainer
+  - frontend-best-practices-audit
+  - frontend-testing-vue-ts-tailwind
+  - gh-actions-audit
+  - skill-frontend-orchestrator
+  - skill-backend-orchestrator
+  - skill-backend-code-audit
+  - skill-backend-testing
+  - testing-general
+  - todo-workflow
+required_frontmatter:
+  - name
+  - description
+allowed_maturity: [experimental, stable, deprecated]
+date_format: "YYYY-MM-DD"
+require_changelog: false
+require_default_prompt_skill_ref: true
+enforce_mojibake_check: true
+required_sections:
+  skill-frontend-orchestrator:
+    - "## Cuando usar"
+    - "## Flujo"
+    - "## Integracion"
+  skill-backend-orchestrator:
+    - "## Cuando usar"
+    - "## Flujo"
+    - "## Integracion"
+  skill-backend-code-audit:
+    - "## Alcance"
+    - "## Flujo minimo"
+    - "## Integracion"
+  skill-backend-testing:
+    - "## Alcance por defecto"
+    - "## Flujo minimo"
+    - "## Integracion"

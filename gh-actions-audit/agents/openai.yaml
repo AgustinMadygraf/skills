@@ -1,0 +1,7 @@
+interface:
+  display_name: "gh-actions-audit"
+  short_description: "Audit, diagnose, and fix GitHub Actions workflow failures. Supports f..."
+  default_prompt: "Use $gh-actions-audit to execute its specialized workflow."
+
+policy:
+  allow_implicit_invocation: true

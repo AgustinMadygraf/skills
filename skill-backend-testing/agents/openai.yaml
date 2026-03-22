@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Backend Testing"
+  short_description: "Unit, API/DB, contract y perf smoke"
+  default_prompt: "Use $skill-backend-testing to design or implement robust unit, API/DB integration, contract, and performance smoke tests for Python/FastAPI and track outcomes in docs/todo.md."
+
+policy:
+  allow_implicit_invocation: true

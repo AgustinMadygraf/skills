@@ -1,0 +1,10 @@
+version: 1
+scope: "python-fastapi"
+defaults:
+  p95_get_ms: 300
+  p95_write_ms: 500
+  error_rate_max_pct: 1.0
+  p95_regression_max_pct: 20.0
+notes:
+  - "write = POST/PUT/PATCH/DELETE"
+  - "si no hay baseline, usar umbrales absolutos y registrar calibracion en docs/todo.md"

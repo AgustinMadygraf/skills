@@ -1,0 +1,7 @@
+interface:
+  display_name: "Skill Frontend Orchestrator"
+  short_description: "Orquesta auditoria, testing y ejecucion frontend"
+  default_prompt: "Use $skill-frontend-orchestrator to coordinate frontend audits, frontend testing, and todo execution with low-risk autonomy."
+
+policy:
+  allow_implicit_invocation: true

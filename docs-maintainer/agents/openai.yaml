@@ -1,0 +1,7 @@
+interface:
+  display_name: "docs-maintainer"
+  short_description: "Skill especializado en mantener, sincronizar y optimizar toda la docu..."
+  default_prompt: "Use $docs-maintainer to execute its specialized workflow."
+
+policy:
+  allow_implicit_invocation: true

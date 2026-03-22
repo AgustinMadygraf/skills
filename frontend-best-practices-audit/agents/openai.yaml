@@ -1,0 +1,7 @@
+interface:
+  display_name: "frontend-best-practices-audit"
+  short_description: "Auditoría especializada de mejores prácticas frontend enfocada en Vue..."
+  default_prompt: "Use $frontend-best-practices-audit to execute its specialized workflow."
+
+policy:
+  allow_implicit_invocation: true
