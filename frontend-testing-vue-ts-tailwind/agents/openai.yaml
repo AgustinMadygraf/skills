@@ -1,7 +1,0 @@
-interface:
-  display_name: "Frontend Testing Vue TS Tailwind"
-  short_description: "Tests UI solidos para Vue, TS, Tailwind y e2e"
-  default_prompt: "Use $frontend-testing-vue-ts-tailwind to add or fix robust frontend tests for Vue components, composables, forms, and smoke flows."
-
-policy:
-  allow_implicit_invocation: true

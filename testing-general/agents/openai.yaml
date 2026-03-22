@@ -1,7 +1,0 @@
-interface:
-  display_name: "Testing General"
-  short_description: "Estrategia y ejecucion de tests de alto valor"
-  default_prompt: "Use $testing-general to design, implement, or debug the right tests for a change without adding fragile coverage."
-
-policy:
-  allow_implicit_invocation: true

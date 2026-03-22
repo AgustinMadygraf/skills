@@ -1,0 +1,8 @@
+interface:
+  display_name: "project-initializer"
+  short_description: "Bootstrap mínimo de proyecto con estructura base y plantillas iniciales"
+  default_prompt: "Use $project-initializer to run a minimal project bootstrap interview, persist answers in README.md, create the required clean-architecture folder layout, generate starter files (.gitignore, .env, .env.example, run.py, config/logger), enforce env key parity, and avoid creating .gitkeep inside src/infrastructure/."
+
+policy:
+  allow_implicit_invocation: false
+

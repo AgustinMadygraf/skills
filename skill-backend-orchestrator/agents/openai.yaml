@@ -1,7 +1,0 @@
-interface:
-  display_name: "Skill Backend Orchestrator"
-  short_description: "Orquesta auditoria y testing backend FastAPI"
-  default_prompt: "Use $skill-backend-orchestrator to coordinate backend audits, backend testing, and low-risk task execution for Python/FastAPI."
-
-policy:
-  allow_implicit_invocation: true

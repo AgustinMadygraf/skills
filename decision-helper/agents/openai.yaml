@@ -1,7 +1,0 @@
-interface:
-  display_name: "decision-helper"
-  short_description: "Asistente para la toma de decisiones arquitectónicas. Lee docs/decisi..."
-  default_prompt: "Use $decision-helper to execute its specialized workflow."
-
-policy:
-  allow_implicit_invocation: true

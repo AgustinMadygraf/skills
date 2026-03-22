@@ -1,4 +1,0 @@
-interface:
-  display_name: "Skills Governance Maintainer"
-  short_description: "Synchronize, validate, and audit local Codex skills governance"
-  default_prompt: "Use $skills-governance-maintainer to sync AGENTS.md with installed skills, run governance checks, and report actionable gaps."
