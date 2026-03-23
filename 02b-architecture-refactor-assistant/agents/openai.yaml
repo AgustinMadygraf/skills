@@ -1,7 +1,0 @@
-interface:
-  display_name: "02b-architecture-refactor-assistant"
-  short_description: "Refactor guiado para resolver deuda de arquitectura"
-  default_prompt: "Use $02b-architecture-refactor-assistant to convert layer-boundary findings into safe, explicit refactor batches and validate gates afterwards."
-
-policy:
-  allow_implicit_invocation: false

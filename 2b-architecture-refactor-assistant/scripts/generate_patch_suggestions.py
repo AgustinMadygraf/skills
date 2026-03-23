@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -128,8 +128,8 @@ def write_suggestions(repo_root: Path, findings: list[dict[str, str]]) -> Path:
     lines.append("")
     lines.append("- [ ] Ajustar imports y contratos segun propuesta")
     lines.append("- [ ] Revisar wiring/composition root")
-    lines.append("- [ ] Ejecutar `01-project-structure-gate`")
-    lines.append("- [ ] Ejecutar `02a-project-architecture-gate`")
+    lines.append("- [ ] Ejecutar `1-project-structure-gate`")
+    lines.append("- [ ] Ejecutar `2a-project-architecture-gate`")
     lines.append("- [ ] Actualizar `docs/todo.md`")
     lines.append("")
 

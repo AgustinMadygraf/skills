@@ -1,5 +1,5 @@
 ---
-name: 00-project-bootstrap
+name: 0-project-bootstrap
 description: "Scaffold minimo de proyecto (estructura + archivos base) sin usarlo como gate de calidad."
 ---
 
@@ -9,14 +9,14 @@ Skill para crear el esqueleto inicial de proyecto.
 
 ## Activacion
 
-- Uso explicito unicamente: `$00-project-bootstrap`.
+- Uso explicito unicamente: `$0-project-bootstrap`.
 
 ## Flujo
 
 1. Ejecutar:
 
 ```bash
-python ~/.codex/skills/01-project-structure-gate/scripts/project_gate.py --repo-root . --scaffold-only
+python ~/.codex/skills/1-project-structure-gate/scripts/project_gate.py --repo-root . --scaffold-only
 ```
 
 2. Si se desea completar contenido faltante aunque ya exista, agregar `--force`.
@@ -31,4 +31,4 @@ python ~/.codex/skills/01-project-structure-gate/scripts/project_gate.py --repo-
 ## Reglas
 
 - No usar esta skill como gate final de calidad.
-- Para auditoria estricta usar `$01-project-structure-gate` y luego `$02a-project-architecture-gate`.
+- Para auditoria estricta usar `$1-project-structure-gate` y luego `$2a-project-architecture-gate`.

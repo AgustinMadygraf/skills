@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -93,8 +93,8 @@ def write_plan(repo_root: Path, findings: list[dict[str, str]], batch_size: int)
             lines.append(f"- Objetivo: resolver {len(batch)} hallazgos ({', '.join(rules)})")
             lines.append("- Checklist:")
             lines.append("  - [ ] Aplicar cambios de codigo")
-            lines.append("  - [ ] Correr 01-project-structure-gate")
-            lines.append("  - [ ] Correr 02a-project-architecture-gate")
+            lines.append("  - [ ] Correr 1-project-structure-gate")
+            lines.append("  - [ ] Correr 2a-project-architecture-gate")
             lines.append("  - [ ] Actualizar docs/todo.md")
             lines.append("- Hallazgos:")
             for f in batch:

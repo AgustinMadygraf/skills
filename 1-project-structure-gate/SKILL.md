@@ -1,5 +1,5 @@
 ---
-name: 01-project-structure-gate
+name: 1-project-structure-gate
 description: "Gate estricto de estructura: env/layout/python-file; actualiza docs/todo.md."
 ---
 
@@ -9,12 +9,12 @@ Valida politicas mecanicas y de estructura del proyecto.
 
 ## Activacion
 
-- Uso explicito unicamente: `$01-project-structure-gate`.
+- Uso explicito unicamente: `$1-project-structure-gate`.
 
 ## Comando
 
 ```bash
-python ~/.codex/skills/01-project-structure-gate/scripts/project_gate.py --repo-root . --structure-gate-only --check
+python ~/.codex/skills/1-project-structure-gate/scripts/project_gate.py --repo-root . --structure-gate-only --check
 ```
 
 ## Gate

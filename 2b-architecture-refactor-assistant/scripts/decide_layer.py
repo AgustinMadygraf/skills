@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
@@ -117,8 +117,8 @@ def main() -> int:
         "forbidden_dependencies": rec["forbidden"],
         "score": score,
         "next_checks": [
-            "01-project-structure-gate",
-            "02a-project-architecture-gate",
+            "1-project-structure-gate",
+            "2a-project-architecture-gate",
         ],
     }
 

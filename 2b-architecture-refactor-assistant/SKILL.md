@@ -1,5 +1,5 @@
 ---
-name: 02b-architecture-refactor-assistant
+name: 2b-architecture-refactor-assistant
 description: "Asistente de refactor arquitectonico guiado para resolver hallazgos de layer-boundary sin autofix ciego."
 ---
 
@@ -9,7 +9,7 @@ Skill para ejecutar refactors arquitectonicos de manera explicita y segura.
 
 ## Activacion
 
-- Uso explicito unicamente: `$02b-architecture-refactor-assistant`.
+- Uso explicito unicamente: `$2b-architecture-refactor-assistant`.
 
 ## Objetivo
 
@@ -20,7 +20,7 @@ Skill para ejecutar refactors arquitectonicos de manera explicita y segura.
 ## Comando recomendado
 
 ```bash
-python ~/.codex/skills/02b-architecture-refactor-assistant/scripts/generate_refactor_plan.py --repo-root .
+python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/generate_refactor_plan.py --repo-root .
 ```
 
 Salida principal:
@@ -30,7 +30,7 @@ Salida principal:
 ## Sugerencias de patch (sin aplicar)
 
 ```bash
-python ~/.codex/skills/02b-architecture-refactor-assistant/scripts/generate_patch_suggestions.py --repo-root .
+python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/generate_patch_suggestions.py --repo-root .
 ```
 
 Salida principal:
@@ -40,7 +40,7 @@ Salida principal:
 ## Decidir que crear ahora
 
 ```bash
-python ~/.codex/skills/02b-architecture-refactor-assistant/scripts/decide_layer.py --repo-root . --change "descripcion del cambio"
+python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/decide_layer.py --repo-root . --change "descripcion del cambio"
 ```
 
 Salida:
@@ -55,5 +55,5 @@ Salida:
 - No cambiar comportamiento funcional sin justificar.
 - Priorizar mover dependencias hacia puertos/adapters correctos.
 - Luego del refactor, re-ejecutar:
-  - `$01-project-structure-gate`
-  - `$02a-project-architecture-gate`
+  - `$1-project-structure-gate`
+  - `$2a-project-architecture-gate`

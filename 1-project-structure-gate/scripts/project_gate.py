@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 from pathlib import Path
@@ -62,6 +63,12 @@ VENDOR_APP_IMPORT_PREFIXES = (
     "flask",
     "pydantic",
 )
+DEFAULT_SOLID_THRESHOLDS = {
+    "max_use_case_classes_per_module": 1,
+    "max_use_case_top_level_functions": 3,
+    "max_gateway_public_methods": 7,
+    "max_public_methods_per_class": 10,
+}
 
 
 def infer_project_name(repo_root: Path) -> str:
@@ -621,6 +628,181 @@ def validate_layer_boundary(repo_root: Path) -> Dict[str, object]:
     }
 
 
+def load_solid_thresholds(path: Path) -> tuple[Dict[str, int], list[str], bool]:
+    thresholds = dict(DEFAULT_SOLID_THRESHOLDS)
+    warnings: list[str] = []
+    loaded = False
+    if not path.exists():
+        return thresholds, warnings, loaded
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        if not isinstance(raw, dict):
+            warnings.append("solid_thresholds_invalid_payload_type")
+            return thresholds, warnings, loaded
+        for key, default_value in DEFAULT_SOLID_THRESHOLDS.items():
+            value = raw.get(key, default_value)
+            if isinstance(value, int) and value >= 1:
+                thresholds[key] = value
+            else:
+                warnings.append(f"solid_threshold_invalid:{key}")
+        loaded = True
+    except json.JSONDecodeError:
+        warnings.append("solid_thresholds_invalid_json")
+    return thresholds, warnings, loaded
+
+
+def validate_solid_lite(repo_root: Path, thresholds: Dict[str, int]) -> Dict[str, object]:
+    findings: list[Dict[str, object]] = []
+    max_use_case_classes_per_module = thresholds["max_use_case_classes_per_module"]
+    max_use_case_top_level_functions = thresholds["max_use_case_top_level_functions"]
+    max_gateway_public_methods = thresholds["max_gateway_public_methods"]
+    max_public_methods_per_class = thresholds["max_public_methods_per_class"]
+    for path in py_files_under_src(repo_root):
+        if path.name == "__init__.py":
+            continue
+        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        try:
+            source = path.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(source)
+        except SyntaxError:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "rule": "solid_lite_syntax_parse_failed",
+                    "file": rel,
+                    "line": 1,
+                    "detail": "No se pudo analizar AST para reglas SRP/ISP.",
+                }
+            )
+            continue
+
+        in_use_cases = rel.startswith("src/use_cases/")
+        in_gateways = rel.startswith("src/interface_adapters/gateways/")
+        in_inner = rel.startswith("src/entities/") or rel.startswith("src/use_cases/")
+
+        class_nodes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+        top_level_funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+
+        # SRP-lite: avoid multiple responsibilities per module in use_cases.
+        if in_use_cases and len(class_nodes) > max_use_case_classes_per_module:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "rule": "solid_srp_multiple_classes_use_case_module",
+                    "file": rel,
+                    "line": class_nodes[max_use_case_classes_per_module].lineno,
+                    "detail": (
+                        f"Modulo con {len(class_nodes)} clases; limite configurado="
+                        f"{max_use_case_classes_per_module}."
+                    ),
+                }
+            )
+        if in_use_cases and len(top_level_funcs) > max_use_case_top_level_functions:
+            findings.append(
+                {
+                    "severity": "warning",
+                    "rule": "solid_srp_many_top_level_functions_use_case_module",
+                    "file": rel,
+                    "line": top_level_funcs[max_use_case_top_level_functions].lineno,
+                    "detail": (
+                        f"Modulo con {len(top_level_funcs)} funciones top-level; limite configurado="
+                        f"{max_use_case_top_level_functions}."
+                    ),
+                }
+            )
+
+        for cls in class_nodes:
+            public_methods = [
+                n
+                for n in cls.body
+                if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+            ]
+            # ISP-lite: gateway interfaces should stay small.
+            if in_gateways and cls.name.lower().endswith(("gateway", "port", "interface", "protocol")):
+                if len(public_methods) > max_gateway_public_methods:
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "rule": "solid_isp_fat_gateway_interface",
+                            "file": rel,
+                            "line": cls.lineno,
+                            "detail": (
+                                f"Interfaz {cls.name} con {len(public_methods)} metodos publicos; "
+                                f"limite configurado={max_gateway_public_methods}."
+                            ),
+                        }
+                    )
+            # SRP-lite: too many public methods likely mixed responsibilities.
+            if rel.startswith("src/use_cases/") or rel.startswith("src/interface_adapters/"):
+                if len(public_methods) > max_public_methods_per_class:
+                    findings.append(
+                        {
+                            "severity": "warning",
+                            "rule": "solid_srp_class_many_public_methods",
+                            "file": rel,
+                            "line": cls.lineno,
+                            "detail": (
+                                f"Clase {cls.name} con {len(public_methods)} metodos publicos; "
+                                f"limite configurado={max_public_methods_per_class}."
+                            ),
+                        }
+                    )
+
+        # DIP-lite: in inner layers, direct vendor imports are critical.
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name
+                    if in_inner and any(module == p or module.startswith(f"{p}.") for p in (VENDOR_DB_IMPORT_PREFIXES + VENDOR_APP_IMPORT_PREFIXES)):
+                        findings.append(
+                            {
+                                "severity": "critical",
+                                "rule": "solid_dip_vendor_import_in_inner_layer",
+                                "file": rel,
+                                "line": node.lineno,
+                                "detail": module,
+                            }
+                        )
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if in_inner and any(module == p or module.startswith(f"{p}.") for p in (VENDOR_DB_IMPORT_PREFIXES + VENDOR_APP_IMPORT_PREFIXES)):
+                    findings.append(
+                        {
+                            "severity": "critical",
+                            "rule": "solid_dip_vendor_import_in_inner_layer",
+                            "file": rel,
+                            "line": node.lineno,
+                            "detail": module,
+                        }
+                    )
+                if in_use_cases and module.startswith("src.interface_adapters.gateways"):
+                    for alias in node.names:
+                        imported = alias.name
+                        if imported == "*" or imported.endswith(("Port", "Gateway", "Protocol", "Interface")):
+                            continue
+                        findings.append(
+                            {
+                                "severity": "warning",
+                                "rule": "solid_dip_use_case_imports_non_port_gateway_symbol",
+                                "file": rel,
+                                "line": node.lineno,
+                                "detail": imported,
+                            }
+                        )
+
+    critical = [f for f in findings if f["severity"] == "critical"]
+    warnings = [f for f in findings if f["severity"] == "warning"]
+    infos = [f for f in findings if f["severity"] == "info"]
+    return {
+        "ok": len(critical) == 0,
+        "critical_total": len(critical),
+        "warning_total": len(warnings),
+        "info_total": len(infos),
+        "findings": findings,
+        "violations": [f"{x['file']}:{x['line']}:{x['rule']}" for x in findings],
+    }
+
+
 def architecture_finding_key(finding: Dict[str, object]) -> str:
     return "|".join(
         [
@@ -767,6 +949,16 @@ def build_todo_items(summary: Dict[str, object]) -> list[str]:
             file = finding.get("file", "unknown_file")
             line = finding.get("line", "?")
             items.append(f"- [ ] [layer-boundary:{sev}] `{rule}` en `{file}:{line}`.")
+        solid_details = summary.get("solid_lite_details", {})
+        solid_findings = solid_details.get("findings", []) if isinstance(solid_details, dict) else []
+        for finding in solid_findings:
+            sev = finding.get("severity", "unknown")
+            rule = finding.get("rule", "unknown_rule")
+            file = finding.get("file", "unknown_file")
+            line = finding.get("line", "?")
+            items.append(f"- [ ] [solid-lite:{sev}] `{rule}` en `{file}:{line}`.")
+        for w in summary.get("solid_thresholds_warnings", []):
+            items.append(f"- [ ] [solid-thresholds:warning] Resolver configuracion: `{w}`.")
 
     if not items:
         items.append("- [ ] Sin tareas pendientes automaticas de project-gates.")
@@ -857,6 +1049,11 @@ def main() -> int:
         help="Fail if architecture findings appear that are not in baseline",
     )
     parser.add_argument(
+        "--solid-thresholds",
+        default="docs/architecture/solid-thresholds.json",
+        help="Solid-lite thresholds file path",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Only validate layout/env policy without writing files",
@@ -925,6 +1122,17 @@ def main() -> int:
         )
         if write_if_missing(repo_root / "README.md", readme_content, args.force):
             created_files.append("README.md")
+
+        solid_thresholds_content = (
+            "{\n"
+            '  "max_use_case_classes_per_module": 1,\n'
+            '  "max_use_case_top_level_functions": 3,\n'
+            '  "max_gateway_public_methods": 7,\n'
+            '  "max_public_methods_per_class": 10\n'
+            "}\n"
+        )
+        if write_if_missing(repo_root / "docs/architecture/solid-thresholds.json", solid_thresholds_content, args.force):
+            created_files.append("docs/architecture/solid-thresholds.json")
 
         if write_if_missing(repo_root / "run.py", "", args.force):
             created_files.append("run.py")
@@ -1016,7 +1224,11 @@ def main() -> int:
     python_policy_ok = bool(python_policy["ok"])
     layer_boundary = validate_layer_boundary(repo_root)
     layer_boundary_ok = bool(layer_boundary["ok"])
-    policy_ok = env_policy_ok and layout_policy_ok and python_policy_ok and layer_boundary_ok
+    solid_thresholds_path = (repo_root / args.solid_thresholds).resolve()
+    solid_thresholds, solid_thresholds_warnings, solid_thresholds_loaded = load_solid_thresholds(solid_thresholds_path)
+    solid_lite = validate_solid_lite(repo_root, thresholds=solid_thresholds)
+    solid_lite_ok = bool(solid_lite["ok"])
+    policy_ok = env_policy_ok and layout_policy_ok and python_policy_ok and layer_boundary_ok and solid_lite_ok
 
     run_structure_gate = args.policy_only or args.structure_gate_only or (
         not args.scaffold_only and not args.architecture_gate_only
@@ -1054,6 +1266,10 @@ def main() -> int:
         "architecture_regression_ok": architecture_regression_ok,
         "architecture_new_findings": architecture_new_findings,
         "architecture_resolved_findings": architecture_resolved_findings,
+        "solid_thresholds_path": str(solid_thresholds_path),
+        "solid_thresholds_loaded": solid_thresholds_loaded,
+        "solid_thresholds": solid_thresholds,
+        "solid_thresholds_warnings": solid_thresholds_warnings,
         "fix_python_mode": args.fix_python,
         "created_dirs": created_dirs,
         "created_files": created_files,
@@ -1073,11 +1289,14 @@ def main() -> int:
         "layer_boundary_ok": layer_boundary_ok,
         "layer_boundary_violations": layer_boundary["violations"],
         "layer_boundary_details": layer_boundary,
+        "solid_lite_ok": solid_lite_ok,
+        "solid_lite_violations": solid_lite["violations"],
+        "solid_lite_details": solid_lite,
         "ok": policy_ok,
     }
 
     structure_gate_ok = env_policy_ok and layout_policy_ok and python_policy_ok
-    architecture_gate_ok = layer_boundary_ok and architecture_regression_ok
+    architecture_gate_ok = layer_boundary_ok and solid_lite_ok and architecture_regression_ok
     selected_ok = True
     if run_structure_gate:
         selected_ok = selected_ok and structure_gate_ok
@@ -1119,6 +1338,8 @@ def main() -> int:
             print(f"- layout_violations={layout['violations']}")
             print(f"- python_violations={python_policy['violations']}")
             print(f"- layer_boundary_violations={layer_boundary['violations']}")
+            print(f"- solid_lite_violations={solid_lite['violations']}")
+            print(f"- solid_thresholds_warnings={solid_thresholds_warnings}")
             print(f"- architecture_new_findings={architecture_new_findings}")
 
     if args.scaffold_only:
