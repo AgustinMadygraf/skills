@@ -1,0 +1,7 @@
+interface:
+  display_name: "01-project-structure-gate"
+  short_description: "Gate de estructura: env, layout y python-file"
+  default_prompt: "Use $01-project-structure-gate to run strict env/layout/python-file checks and update docs/todo.md."
+
+policy:
+  allow_implicit_invocation: false

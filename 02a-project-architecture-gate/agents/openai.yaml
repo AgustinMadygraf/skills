@@ -1,0 +1,7 @@
+interface:
+  display_name: "02a-project-architecture-gate"
+  short_description: "Gate de arquitectura por capas"
+  default_prompt: "Use $02a-project-architecture-gate to run strict layer-boundary checks and update docs/todo.md."
+
+policy:
+  allow_implicit_invocation: false
