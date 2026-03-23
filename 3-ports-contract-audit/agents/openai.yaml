@@ -1,0 +1,7 @@
+interface:
+  display_name: "3-ports-contract-audit"
+  short_description: "Audit de contratos y puertos"
+  default_prompt: "Deprecated: prefer $3a-ports-contract-audit. Use $3-ports-contract-audit only for legacy compatibility."
+
+policy:
+  allow_implicit_invocation: false

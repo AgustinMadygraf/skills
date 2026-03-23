@@ -55,5 +55,5 @@ Salida:
 - No cambiar comportamiento funcional sin justificar.
 - Priorizar mover dependencias hacia puertos/adapters correctos.
 - Luego del refactor, re-ejecutar:
-  - `$1-project-structure-gate`
+  - `$1a-project-structure-gate`
   - `$2a-project-architecture-gate`

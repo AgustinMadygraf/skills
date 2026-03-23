@@ -128,7 +128,7 @@ def write_suggestions(repo_root: Path, findings: list[dict[str, str]]) -> Path:
     lines.append("")
     lines.append("- [ ] Ajustar imports y contratos segun propuesta")
     lines.append("- [ ] Revisar wiring/composition root")
-    lines.append("- [ ] Ejecutar `1-project-structure-gate`")
+    lines.append("- [ ] Ejecutar `1a-project-structure-gate`")
     lines.append("- [ ] Ejecutar `2a-project-architecture-gate`")
     lines.append("- [ ] Actualizar `docs/todo.md`")
     lines.append("")

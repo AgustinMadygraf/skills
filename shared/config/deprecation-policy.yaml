@@ -1,6 +1,5 @@
 version: 1
 deprecated_skills:
-  # Example:
-  # old-skill-name:
-  #   replacement: new-skill-name
-  #   deprecates_on: "2026-06-01"
+  3-ports-contract-audit:
+    replacement: 3a-ports-contract-audit
+    deprecates_on: "2026-06-30"

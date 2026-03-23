@@ -1,0 +1,7 @@
+interface:
+  display_name: "0b-project-bootstrap-repair"
+  short_description: "Repair de bootstrap y estructura base"
+  default_prompt: "Use $0b-project-bootstrap-repair to run structure repair with --structure-gate-only --fix-python and keep docs/todo.md aligned with remaining violations."
+
+policy:
+  allow_implicit_invocation: false

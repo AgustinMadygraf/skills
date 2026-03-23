@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import datetime as dt
+import fnmatch
 import json
 import re
 from pathlib import Path
@@ -68,7 +70,12 @@ DEFAULT_SOLID_THRESHOLDS = {
     "max_use_case_top_level_functions": 3,
     "max_gateway_public_methods": 7,
     "max_public_methods_per_class": 10,
+    "max_use_case_top_level_functions_strict": 2,
+    "max_gateway_public_methods_strict": 5,
+    "max_public_methods_per_class_strict": 8,
+    "max_ocp_conditional_branches_strict": 4,
 }
+DEFAULT_EXEMPTIONS_EXPIRY_WARNING_DAYS = 7
 
 
 def infer_project_name(repo_root: Path) -> str:
@@ -381,6 +388,20 @@ def normalize_import_order(repo_root: Path) -> list[str]:
         if normalize_import_order_for_file(path):
             fixed.append(str(path.relative_to(repo_root)))
     return fixed
+
+
+def ensure_gitignore_tmp(repo_root: Path) -> bool:
+    path = repo_root / ".gitignore"
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    if any(x.strip() == ".tmp/" for x in lines):
+        return False
+    if lines and lines[-1].strip() != "":
+        lines.append("")
+    lines.append(".tmp/")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+    return True
 
 
 def validate_no_dataclass(repo_root: Path) -> list[str]:
@@ -803,6 +824,291 @@ def validate_solid_lite(repo_root: Path, thresholds: Dict[str, int]) -> Dict[str
     }
 
 
+def _if_chain_branches(node: ast.If) -> int:
+    branches = 1
+    current = node
+    while (
+        current.orelse
+        and len(current.orelse) == 1
+        and isinstance(current.orelse[0], ast.If)
+    ):
+        branches += 1
+        current = current.orelse[0]
+    return branches
+
+
+def validate_solid_strict(repo_root: Path, thresholds: Dict[str, int]) -> Dict[str, object]:
+    findings: list[Dict[str, object]] = []
+    max_use_case_top_level_functions_strict = thresholds["max_use_case_top_level_functions_strict"]
+    max_gateway_public_methods_strict = thresholds["max_gateway_public_methods_strict"]
+    max_public_methods_per_class_strict = thresholds["max_public_methods_per_class_strict"]
+    max_ocp_conditional_branches_strict = thresholds["max_ocp_conditional_branches_strict"]
+
+    for path in py_files_under_src(repo_root):
+        if path.name == "__init__.py":
+            continue
+        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        try:
+            source = path.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+
+        in_use_cases = rel.startswith("src/use_cases/")
+        in_gateways = rel.startswith("src/interface_adapters/gateways/")
+        in_adapters = rel.startswith("src/interface_adapters/")
+
+        class_nodes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+        top_level_funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+
+        if in_use_cases and len(top_level_funcs) > max_use_case_top_level_functions_strict:
+            findings.append(
+                {
+                    "severity": "critical",
+                    "rule": "solid_strict_srp_many_top_level_functions_use_case_module",
+                    "file": rel,
+                    "line": top_level_funcs[max_use_case_top_level_functions_strict].lineno,
+                    "detail": (
+                        f"Modulo con {len(top_level_funcs)} funciones top-level; limite strict="
+                        f"{max_use_case_top_level_functions_strict}."
+                    ),
+                }
+            )
+
+        for cls in class_nodes:
+            public_methods = [
+                n for n in cls.body if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+            ]
+            if in_gateways and cls.name.lower().endswith(("gateway", "port", "interface", "protocol")):
+                if len(public_methods) > max_gateway_public_methods_strict:
+                    findings.append(
+                        {
+                            "severity": "critical",
+                            "rule": "solid_strict_isp_fat_gateway_interface",
+                            "file": rel,
+                            "line": cls.lineno,
+                            "detail": (
+                                f"Interfaz {cls.name} con {len(public_methods)} metodos publicos; "
+                                f"limite strict={max_gateway_public_methods_strict}."
+                            ),
+                        }
+                    )
+            if in_use_cases or in_adapters:
+                if len(public_methods) > max_public_methods_per_class_strict:
+                    findings.append(
+                        {
+                            "severity": "critical",
+                            "rule": "solid_strict_srp_class_many_public_methods",
+                            "file": rel,
+                            "line": cls.lineno,
+                            "detail": (
+                                f"Clase {cls.name} con {len(public_methods)} metodos publicos; "
+                                f"limite strict={max_public_methods_per_class_strict}."
+                            ),
+                        }
+                    )
+
+            for method in [n for n in cls.body if isinstance(n, ast.FunctionDef)]:
+                for node in ast.walk(method):
+                    if isinstance(node, ast.If):
+                        branches = _if_chain_branches(node)
+                        if branches > max_ocp_conditional_branches_strict:
+                            findings.append(
+                                {
+                                    "severity": "warning",
+                                    "rule": "solid_strict_ocp_long_conditional_chain",
+                                    "file": rel,
+                                    "line": node.lineno,
+                                    "detail": (
+                                        f"Cadena if/elif con {branches} ramas; limite strict="
+                                        f"{max_ocp_conditional_branches_strict}."
+                                    ),
+                                }
+                            )
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if in_use_cases and module.startswith("src.interface_adapters.gateways"):
+                    for alias in node.names:
+                        imported = alias.name
+                        if imported == "*" or imported.endswith(("Port", "Gateway", "Protocol", "Interface")):
+                            continue
+                        findings.append(
+                            {
+                                "severity": "critical",
+                                "rule": "solid_strict_dip_use_case_imports_non_port_gateway_symbol",
+                                "file": rel,
+                                "line": node.lineno,
+                                "detail": imported,
+                            }
+                        )
+
+    critical = [f for f in findings if f["severity"] == "critical"]
+    warnings = [f for f in findings if f["severity"] == "warning"]
+    infos = [f for f in findings if f["severity"] == "info"]
+    return {
+        "ok": len(critical) == 0,
+        "critical_total": len(critical),
+        "warning_total": len(warnings),
+        "info_total": len(infos),
+        "findings": findings,
+        "violations": [f"{x['file']}:{x['line']}:{x['rule']}" for x in findings],
+    }
+
+
+def load_exemptions_registry(
+    path: Path,
+    expiry_warning_days: int,
+) -> tuple[list[Dict[str, object]], list[str], bool, Dict[str, int]]:
+    warnings: list[str] = []
+    loaded = False
+    stats: Dict[str, int] = {
+        "total": 0,
+        "active": 0,
+        "disabled": 0,
+        "expired": 0,
+        "invalid": 0,
+        "expiring_soon": 0,
+    }
+    if not path.exists():
+        return [], warnings, loaded, stats
+    try:
+        payload_text = path.read_text(encoding="utf-8", errors="ignore").replace("\ufeff", "")
+        raw = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return [], ["exemptions_registry_invalid_json"], loaded, stats
+    if not isinstance(raw, dict) or not isinstance(raw.get("exemptions"), list):
+        return [], ["exemptions_registry_invalid_payload_type"], loaded, stats
+
+    loaded = True
+    valid: list[Dict[str, object]] = []
+    today = dt.date.today()
+    for i, entry in enumerate(raw.get("exemptions", []), start=1):
+        stats["total"] += 1
+        if not isinstance(entry, dict):
+            warnings.append(f"exemption_invalid_entry_type:index_{i}")
+            stats["invalid"] += 1
+            continue
+        ex_id = str(entry.get("id", "")).strip()
+        rule = str(entry.get("rule", "")).strip()
+        file_pattern = str(entry.get("file", "")).strip()
+        reason = str(entry.get("reason", "")).strip()
+        owner = str(entry.get("owner", "")).strip()
+        expires_on = str(entry.get("expires_on", "")).strip()
+        enabled = bool(entry.get("enabled", True))
+        if not enabled:
+            stats["disabled"] += 1
+            continue
+
+        missing = []
+        if not ex_id:
+            missing.append("id")
+        if not rule:
+            missing.append("rule")
+        if not file_pattern:
+            missing.append("file")
+        if not reason:
+            missing.append("reason")
+        if not owner:
+            missing.append("owner")
+        if not expires_on:
+            missing.append("expires_on")
+        if missing:
+            warnings.append(f"exemption_missing_fields:{ex_id or f'index_{i}'}:{','.join(missing)}")
+            stats["invalid"] += 1
+            continue
+
+        try:
+            expiry = dt.date.fromisoformat(expires_on)
+        except ValueError:
+            warnings.append(f"exemption_invalid_expiry:{ex_id}:{expires_on}")
+            stats["invalid"] += 1
+            continue
+        if expiry < today:
+            warnings.append(f"exemption_expired:{ex_id}:{expires_on}")
+            stats["expired"] += 1
+            continue
+
+        line_value = entry.get("line")
+        line_num = None
+        if isinstance(line_value, int) and line_value > 0:
+            line_num = line_value
+        elif line_value is not None:
+            warnings.append(f"exemption_invalid_line:{ex_id}")
+            stats["invalid"] += 1
+            continue
+
+        days_left = (expiry - today).days
+        if days_left <= max(0, expiry_warning_days):
+            warnings.append(f"exemption_expiring_soon:{ex_id}:{expires_on}:{days_left}d")
+            stats["expiring_soon"] += 1
+
+        valid.append(
+            {
+                "id": ex_id,
+                "rule": rule,
+                "file": file_pattern,
+                "line": line_num,
+                "reason": reason,
+                "owner": owner,
+                "expires_on": expires_on,
+            }
+        )
+    stats["active"] = len(valid)
+    return valid, warnings, loaded, stats
+
+
+def apply_exemptions_to_findings(
+    findings: list[Dict[str, object]],
+    exemptions: list[Dict[str, object]],
+) -> tuple[list[Dict[str, object]], list[Dict[str, object]], list[str]]:
+    if not exemptions:
+        return findings, [], []
+    kept: list[Dict[str, object]] = []
+    exempted: list[Dict[str, object]] = []
+    applied_ids: list[str] = []
+    for f in findings:
+        matched = None
+        file_path = str(f.get("file", ""))
+        rule = str(f.get("rule", ""))
+        line = int(f.get("line", 0) or 0)
+        for ex in exemptions:
+            if ex["rule"] != rule:
+                continue
+            if not fnmatch.fnmatch(file_path, str(ex["file"])):
+                continue
+            ex_line = ex.get("line")
+            if ex_line is not None and int(ex_line) != line:
+                continue
+            matched = ex
+            break
+        if matched is None:
+            kept.append(f)
+            continue
+        f2 = dict(f)
+        f2["exempted_by"] = matched["id"]
+        f2["exemption_owner"] = matched["owner"]
+        f2["exemption_expires_on"] = matched["expires_on"]
+        exempted.append(f2)
+        applied_ids.append(str(matched["id"]))
+    return kept, exempted, sorted(set(applied_ids))
+
+
+def build_findings_report(findings: list[Dict[str, object]]) -> Dict[str, object]:
+    critical = [f for f in findings if f["severity"] == "critical"]
+    warnings = [f for f in findings if f["severity"] == "warning"]
+    infos = [f for f in findings if f["severity"] == "info"]
+    return {
+        "ok": len(critical) == 0,
+        "critical_total": len(critical),
+        "warning_total": len(warnings),
+        "info_total": len(infos),
+        "findings": findings,
+        "violations": [f"{x['file']}:{x['line']}:{x['rule']}" for x in findings],
+    }
+
+
 def architecture_finding_key(finding: Dict[str, object]) -> str:
     return "|".join(
         [
@@ -919,8 +1225,13 @@ TODO_LEGACY_END = "<!-- project-initializer:auto:end -->"
 
 def build_todo_items(summary: Dict[str, object]) -> list[str]:
     items: list[str] = []
+    run_bootstrap_gate = bool(summary.get("run_bootstrap_gate", False))
     run_structure_gate = bool(summary.get("run_structure_gate", True))
     run_architecture_gate = bool(summary.get("run_architecture_gate", True))
+
+    if run_bootstrap_gate and not bool(summary.get("layout_policy_ok", True)):
+        for v in summary.get("layout_violations", []):
+            items.append(f"- [ ] [bootstrap-policy] Resolver: `{v}`.")
 
     if run_structure_gate and not bool(summary.get("env_policy_ok", True)):
         for key in summary.get("env_only", []):
@@ -957,8 +1268,19 @@ def build_todo_items(summary: Dict[str, object]) -> list[str]:
             file = finding.get("file", "unknown_file")
             line = finding.get("line", "?")
             items.append(f"- [ ] [solid-lite:{sev}] `{rule}` en `{file}:{line}`.")
+        if summary.get("solid_profile") == "strict":
+            strict_details = summary.get("solid_strict_details", {})
+            strict_findings = strict_details.get("findings", []) if isinstance(strict_details, dict) else []
+            for finding in strict_findings:
+                sev = finding.get("severity", "unknown")
+                rule = finding.get("rule", "unknown_rule")
+                file = finding.get("file", "unknown_file")
+                line = finding.get("line", "?")
+                items.append(f"- [ ] [solid-strict:{sev}] `{rule}` en `{file}:{line}`.")
         for w in summary.get("solid_thresholds_warnings", []):
             items.append(f"- [ ] [solid-thresholds:warning] Resolver configuracion: `{w}`.")
+        for w in summary.get("architecture_exemptions_warnings", []):
+            items.append(f"- [ ] [architecture-exemptions:warning] Resolver registro: `{w}`.")
 
     if not items:
         items.append("- [ ] Sin tareas pendientes automaticas de project-gates.")
@@ -969,9 +1291,13 @@ def upsert_todo_md(repo_root: Path, summary: Dict[str, object]) -> Path:
     docs_dir = repo_root / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
     todo_path = docs_dir / "todo.md"
+    only_bootstrap_gate = bool(summary.get("run_bootstrap_gate", False)) and not bool(
+        summary.get("run_structure_gate", False)
+    ) and not bool(summary.get("run_architecture_gate", False))
+    title = "Project Bootstrap Gate (autogenerado)" if only_bootstrap_gate else "Project Gates (autogenerado)"
     auto_lines = [
         TODO_AUTOGEN_START,
-        "## Project Gates (autogenerado)",
+        f"## {title}",
         "",
         *build_todo_items(summary),
         TODO_AUTOGEN_END,
@@ -1034,9 +1360,25 @@ def main() -> int:
         help="Run only architecture gate (layer-boundary) and update docs/todo.md",
     )
     parser.add_argument(
+        "--bootstrap-gate-only",
+        action="store_true",
+        help="Run only bootstrap gate (base layout/files) and update docs/todo.md",
+    )
+    parser.add_argument(
         "--architecture-baseline",
         default=".tmp/architecture_baseline.json",
         help="Architecture baseline file path",
+    )
+    parser.add_argument(
+        "--architecture-exemptions",
+        default="docs/architecture/exemptions.json",
+        help="Architecture exemptions registry file path",
+    )
+    parser.add_argument(
+        "--exemptions-expiry-warning-days",
+        type=int,
+        default=DEFAULT_EXEMPTIONS_EXPIRY_WARNING_DAYS,
+        help="Warn when exemptions expire in N days or less",
     )
     parser.add_argument(
         "--write-architecture-baseline",
@@ -1054,9 +1396,20 @@ def main() -> int:
         help="Solid-lite thresholds file path",
     )
     parser.add_argument(
+        "--solid-profile",
+        choices=["lite", "strict"],
+        default="lite",
+        help="Solid profile: lite (default) or strict",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="Only validate layout/env policy without writing files",
+    )
+    parser.add_argument(
+        "--write-report",
+        action="store_true",
+        help="Write JSON report file even in audit modes",
     )
     parser.add_argument(
         "--fix-python",
@@ -1068,9 +1421,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.scaffold_only and args.policy_only:
         parser.error("--scaffold-only and --policy-only are mutually exclusive")
-    if args.structure_gate_only and args.architecture_gate_only:
-        parser.error("--structure-gate-only and --architecture-gate-only are mutually exclusive")
-    if args.scaffold_only and (args.structure_gate_only or args.architecture_gate_only):
+    gate_only_flags = [
+        bool(args.structure_gate_only),
+        bool(args.architecture_gate_only),
+        bool(args.bootstrap_gate_only),
+    ]
+    if sum(1 for x in gate_only_flags if x) > 1:
+        parser.error("--structure-gate-only, --architecture-gate-only and --bootstrap-gate-only are mutually exclusive")
+    if args.scaffold_only and (args.structure_gate_only or args.architecture_gate_only or args.bootstrap_gate_only):
         parser.error("--scaffold-only cannot be combined with gate-only flags")
 
     repo_root = Path(args.repo_root).resolve()
@@ -1128,11 +1486,22 @@ def main() -> int:
             '  "max_use_case_classes_per_module": 1,\n'
             '  "max_use_case_top_level_functions": 3,\n'
             '  "max_gateway_public_methods": 7,\n'
-            '  "max_public_methods_per_class": 10\n'
+            '  "max_public_methods_per_class": 10,\n'
+            '  "max_use_case_top_level_functions_strict": 2,\n'
+            '  "max_gateway_public_methods_strict": 5,\n'
+            '  "max_public_methods_per_class_strict": 8,\n'
+            '  "max_ocp_conditional_branches_strict": 4\n'
             "}\n"
         )
         if write_if_missing(repo_root / "docs/architecture/solid-thresholds.json", solid_thresholds_content, args.force):
             created_files.append("docs/architecture/solid-thresholds.json")
+        exemptions_content = (
+            "{\n"
+            '  "exemptions": []\n'
+            "}\n"
+        )
+        if write_if_missing(repo_root / "docs/architecture/exemptions.json", exemptions_content, args.force):
+            created_files.append("docs/architecture/exemptions.json")
 
         if write_if_missing(repo_root / "run.py", "", args.force):
             created_files.append("run.py")
@@ -1197,11 +1566,14 @@ def main() -> int:
         "init_emptied": [],
         "path_docstring_fixed": [],
         "import_order_fixed": [],
+        "gitignore_tmp_added": [],
     }
     if args.fix_python and not args.check:
         auto_fixed["init_emptied"] = normalize_init_files(repo_root)
         auto_fixed["path_docstring_fixed"] = normalize_path_docstrings(repo_root)
         auto_fixed["import_order_fixed"] = normalize_import_order(repo_root)
+        if ensure_gitignore_tmp(repo_root):
+            auto_fixed["gitignore_tmp_added"] = [".gitignore"]
 
     env_data = parse_env_file(repo_root / ".env")
     env_example_data = parse_env_file(repo_root / ".env.example")
@@ -1223,19 +1595,60 @@ def main() -> int:
     python_policy = validate_python_policy(repo_root, missing_inits=missing_inits)
     python_policy_ok = bool(python_policy["ok"])
     layer_boundary = validate_layer_boundary(repo_root)
-    layer_boundary_ok = bool(layer_boundary["ok"])
     solid_thresholds_path = (repo_root / args.solid_thresholds).resolve()
     solid_thresholds, solid_thresholds_warnings, solid_thresholds_loaded = load_solid_thresholds(solid_thresholds_path)
     solid_lite = validate_solid_lite(repo_root, thresholds=solid_thresholds)
+    solid_strict = validate_solid_strict(repo_root, thresholds=solid_thresholds) if args.solid_profile == "strict" else {
+        "ok": True,
+        "critical_total": 0,
+        "warning_total": 0,
+        "info_total": 0,
+        "findings": [],
+        "violations": [],
+    }
+    exemptions_path = (repo_root / args.architecture_exemptions).resolve()
+    exemptions_warning_days = max(0, int(args.exemptions_expiry_warning_days))
+    exemptions, exemptions_warnings, exemptions_loaded, exemptions_stats = load_exemptions_registry(
+        exemptions_path,
+        expiry_warning_days=exemptions_warning_days,
+    )
+    layer_kept, layer_exempted, layer_applied_ids = apply_exemptions_to_findings(layer_boundary["findings"], exemptions)
+    solid_lite_kept, solid_lite_exempted, solid_lite_applied_ids = apply_exemptions_to_findings(
+        solid_lite["findings"], exemptions
+    )
+    solid_strict_kept, solid_strict_exempted, solid_strict_applied_ids = apply_exemptions_to_findings(
+        solid_strict["findings"], exemptions
+    )
+    layer_boundary = build_findings_report(layer_kept)
+    solid_lite = build_findings_report(solid_lite_kept)
+    solid_strict = build_findings_report(solid_strict_kept)
+    layer_boundary_ok = bool(layer_boundary["ok"])
     solid_lite_ok = bool(solid_lite["ok"])
-    policy_ok = env_policy_ok and layout_policy_ok and python_policy_ok and layer_boundary_ok and solid_lite_ok
+    solid_strict_ok = bool(solid_strict["ok"])
+    policy_ok = (
+        env_policy_ok
+        and layout_policy_ok
+        and python_policy_ok
+        and layer_boundary_ok
+        and solid_lite_ok
+        and (solid_strict_ok if args.solid_profile == "strict" else True)
+    )
 
-    run_structure_gate = args.policy_only or args.structure_gate_only or (
-        not args.scaffold_only and not args.architecture_gate_only
+    run_structure_gate = (
+        not args.bootstrap_gate_only
+        and (
+        args.policy_only
+        or args.structure_gate_only
+        or (args.scaffold_only and args.fix_python)
+        or (not args.scaffold_only and not args.architecture_gate_only)
+        )
     )
-    run_architecture_gate = args.policy_only or args.architecture_gate_only or (
-        not args.scaffold_only and not args.structure_gate_only
+    run_architecture_gate = (not args.bootstrap_gate_only) and (
+        args.policy_only or args.architecture_gate_only or (
+            not args.scaffold_only and not args.structure_gate_only
+        )
     )
+    run_bootstrap_gate = args.bootstrap_gate_only
 
     baseline_path = (repo_root / args.architecture_baseline).resolve()
     baseline_written = False
@@ -1260,6 +1673,18 @@ def main() -> int:
         "structure_gate_only_mode": args.structure_gate_only,
         "architecture_gate_only_mode": args.architecture_gate_only,
         "architecture_baseline_path": str(baseline_path),
+        "architecture_exemptions_path": str(exemptions_path),
+        "architecture_exemptions_loaded": exemptions_loaded,
+        "architecture_exemptions_warning_days": exemptions_warning_days,
+        "architecture_exemptions_warnings": exemptions_warnings,
+        "architecture_exemptions_stats": exemptions_stats,
+        "architecture_exemptions_applied_ids": sorted(
+            set(layer_applied_ids + solid_lite_applied_ids + solid_strict_applied_ids)
+        ),
+        "architecture_exempted_findings_total": len(layer_exempted) + len(solid_lite_exempted) + len(solid_strict_exempted),
+        "layer_boundary_exempted_findings": layer_exempted,
+        "solid_lite_exempted_findings": solid_lite_exempted,
+        "solid_strict_exempted_findings": solid_strict_exempted,
         "write_architecture_baseline_mode": args.write_architecture_baseline,
         "enforce_architecture_baseline_mode": args.enforce_architecture_baseline,
         "architecture_baseline_written": baseline_written,
@@ -1270,6 +1695,7 @@ def main() -> int:
         "solid_thresholds_loaded": solid_thresholds_loaded,
         "solid_thresholds": solid_thresholds,
         "solid_thresholds_warnings": solid_thresholds_warnings,
+        "solid_profile": args.solid_profile,
         "fix_python_mode": args.fix_python,
         "created_dirs": created_dirs,
         "created_files": created_files,
@@ -1292,18 +1718,31 @@ def main() -> int:
         "solid_lite_ok": solid_lite_ok,
         "solid_lite_violations": solid_lite["violations"],
         "solid_lite_details": solid_lite,
+        "solid_strict_ok": solid_strict_ok,
+        "solid_strict_violations": solid_strict["violations"],
+        "solid_strict_details": solid_strict,
         "ok": policy_ok,
     }
 
     structure_gate_ok = env_policy_ok and layout_policy_ok and python_policy_ok
-    architecture_gate_ok = layer_boundary_ok and solid_lite_ok and architecture_regression_ok
+    architecture_gate_ok = (
+        layer_boundary_ok
+        and solid_lite_ok
+        and (solid_strict_ok if args.solid_profile == "strict" else True)
+        and architecture_regression_ok
+    )
+    bootstrap_gate_ok = layout_policy_ok
     selected_ok = True
+    if run_bootstrap_gate:
+        selected_ok = selected_ok and bootstrap_gate_ok
     if run_structure_gate:
         selected_ok = selected_ok and structure_gate_ok
     if run_architecture_gate:
         selected_ok = selected_ok and architecture_gate_ok
+    summary["bootstrap_gate_ok"] = bootstrap_gate_ok
     summary["structure_gate_ok"] = structure_gate_ok
     summary["architecture_gate_ok"] = architecture_gate_ok
+    summary["run_bootstrap_gate"] = run_bootstrap_gate
     summary["run_structure_gate"] = run_structure_gate
     summary["run_architecture_gate"] = run_architecture_gate
     summary["ok"] = selected_ok
@@ -1311,18 +1750,25 @@ def main() -> int:
     todo_path = upsert_todo_md(repo_root, summary)
     summary["todo_path"] = str(todo_path)
 
-    report_path = (repo_root / args.report).resolve()
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    should_write_report = args.write_report or not (
+        args.check or args.structure_gate_only or args.architecture_gate_only or args.bootstrap_gate_only
+    )
+    report_path = None
+    if should_write_report:
+        report_path = (repo_root / args.report).resolve()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    summary["report_path"] = str(report_path) if report_path is not None else None
 
     if args.json:
         print(json.dumps(summary, ensure_ascii=False))
     else:
-        print(f"BOOTSTRAP={'PASS' if policy_ok else 'FAIL'}")
+        print(f"BOOTSTRAP={'PASS' if bool(summary['ok']) else 'FAIL'}")
         print(f"REPO={repo_root}")
-        print(f"REPORT={report_path}")
+        print(f"REPORT={report_path if report_path is not None else 'SKIPPED'}")
         print(f"CHECK_MODE={args.check}")
         print(f"FIX_PYTHON_MODE={args.fix_python}")
+        print(f"BOOTSTRAP_GATE_OK={bootstrap_gate_ok}")
         print(f"CREATED_DIRS={len(created_dirs)}")
         print(f"CREATED_FILES={len(created_files)}")
         print(f"ENV_PARITY_OK={env_parity_ok}")
@@ -1330,17 +1776,24 @@ def main() -> int:
         print(f"LAYOUT_POLICY_OK={layout_policy_ok}")
         print(f"PYTHON_POLICY_OK={python_policy_ok}")
         print(f"LAYER_BOUNDARY_OK={layer_boundary_ok}")
-        if not policy_ok:
-            print(f"- env_only={env_only}")
-            print(f"- env_example_only={env_example_only}")
-            print(f"- env_invalid_lines={invalid_lines}")
-            print(f"- possible_secrets_in_example={possible_secrets_in_example}")
-            print(f"- layout_violations={layout['violations']}")
-            print(f"- python_violations={python_policy['violations']}")
-            print(f"- layer_boundary_violations={layer_boundary['violations']}")
-            print(f"- solid_lite_violations={solid_lite['violations']}")
-            print(f"- solid_thresholds_warnings={solid_thresholds_warnings}")
-            print(f"- architecture_new_findings={architecture_new_findings}")
+        if not bool(summary["ok"]):
+            if run_bootstrap_gate:
+                print(f"- layout_violations={layout['violations']}")
+            if run_structure_gate:
+                print(f"- env_only={env_only}")
+                print(f"- env_example_only={env_example_only}")
+                print(f"- env_invalid_lines={invalid_lines}")
+                print(f"- possible_secrets_in_example={possible_secrets_in_example}")
+                print(f"- layout_violations={layout['violations']}")
+                print(f"- python_violations={python_policy['violations']}")
+            if run_architecture_gate:
+                print(f"- layer_boundary_violations={layer_boundary['violations']}")
+                print(f"- solid_lite_violations={solid_lite['violations']}")
+                if args.solid_profile == "strict":
+                    print(f"- solid_strict_violations={solid_strict['violations']}")
+                print(f"- solid_thresholds_warnings={solid_thresholds_warnings}")
+                print(f"- architecture_exemptions_warnings={exemptions_warnings}")
+                print(f"- architecture_new_findings={architecture_new_findings}")
 
     if args.scaffold_only:
         return 0

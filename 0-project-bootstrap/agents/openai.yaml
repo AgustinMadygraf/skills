@@ -1,7 +1,0 @@
-interface:
-  display_name: "0-project-bootstrap"
-  short_description: "Scaffold minimo de proyecto con estructura base"
-  default_prompt: "Use $0-project-bootstrap to scaffold folders/files for a clean-architecture starter and update bootstrap evidence."
-
-policy:
-  allow_implicit_invocation: false

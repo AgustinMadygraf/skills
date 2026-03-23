@@ -1,0 +1,7 @@
+interface:
+  display_name: "0a-project-bootstrap-audit"
+  short_description: "Audit de bootstrap inicial"
+  default_prompt: "Use $0a-project-bootstrap-audit to run bootstrap-gate-only (base layout/files) and write findings into docs/todo.md without applying fixes."
+
+policy:
+  allow_implicit_invocation: false

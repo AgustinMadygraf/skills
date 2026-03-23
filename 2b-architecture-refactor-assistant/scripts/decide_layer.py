@@ -117,7 +117,7 @@ def main() -> int:
         "forbidden_dependencies": rec["forbidden"],
         "score": score,
         "next_checks": [
-            "1-project-structure-gate",
+            "1a-project-structure-gate",
             "2a-project-architecture-gate",
         ],
     }

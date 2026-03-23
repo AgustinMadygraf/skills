@@ -1,0 +1,7 @@
+interface:
+  display_name: "3b-ports-contract-repair"
+  short_description: "Repair de contratos y puertos"
+  default_prompt: "Use $3b-ports-contract-repair to apply deterministic low-risk ports/contracts fixes and update docs/todo.md."
+
+policy:
+  allow_implicit_invocation: false

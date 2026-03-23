@@ -1,0 +1,7 @@
+interface:
+  display_name: "1a-project-structure-gate"
+  short_description: "Audit de estructura: env, layout y python-file"
+  default_prompt: "Use $1a-project-structure-gate to audit env/layout/python-file policy and write findings to docs/todo.md."
+
+policy:
+  allow_implicit_invocation: false
