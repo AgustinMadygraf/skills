@@ -4,13 +4,13 @@ Ecosistema de skills para auditoria y reparacion de proyectos Python con Clean A
 
 ## Nuevo esquema de skills (v2)
 
-| Fase | Audit (gate) | Repair (fix) |
-|------|--------------|--------------|
-| 0 - Bootstrap | `0a-project-bootstrap-audit` | `0b-project-bootstrap-repair` |
-| 1 - Estructura | `1a-project-structure-gate` | `1b-project-structure-repair` |
-| 2 - Layer Boundary | `2a-layer-boundary-gate` | `2b-layer-boundary-repair` |
-| 3 - SOLID | `3a-solid-gate` | `3b-solid-refactor-assistant` |
-| 4 - Puertos | `4a-ports-contract-audit` | `4b-ports-contract-repair` |
+| Fase                  | Audit (gate)                  | Repair (fix)                  |
+|-----------------------|-------------------------------|-------------------------------|
+| 0 - Bootstrap         | `0a-project-bootstrap-audit`  | `0b-project-bootstrap-repair` |
+| 1 - Estructura        | `1a-project-structure-gate`   | `1b-project-structure-repair` |
+| 2 - Layer Boundary    | `2a-layer-boundary-gate`      | `2b-layer-boundary-repair`    |
+| 3 - SOLID             | `3a-solid-gate`               | `3b-solid-refactor-assistant` |
+| 4 - Puertos           | `4a-ports-contract-audit`     | `4b-ports-contract-repair`    |
 
 ### Flujo de uso
 

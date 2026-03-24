@@ -1291,17 +1291,137 @@ def save_architecture_baseline(path: Path, findings: list[Dict[str, object]]) ->
     )
 
 
+def get_defined_names(tree: ast.AST) -> set[str]:
+    """Extrae nombres definidos en el archivo (clases, funciones, variables)."""
+    defined = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            defined.add(node.name)
+        elif isinstance(node, ast.FunctionDef):
+            defined.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined.add(target.id)
+    return defined
+
+
+def get_imported_names(tree: ast.AST) -> set[str]:
+    """Extrae nombres importados en el archivo."""
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.asname or alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                imported.add(alias.asname or alias.name)
+    return imported
+
+
+def get_all_exports(tree: ast.AST) -> list[str] | None:
+    """Extrae los nombres de __all__ si está definido."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "__all__":
+                    if isinstance(node.value, (ast.List, ast.Tuple)):
+                        exports = []
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                                exports.append(elt.value)
+                            elif isinstance(elt, ast.Str):  # Python < 3.8
+                                exports.append(elt.s)
+                        return exports
+    return None
+
+
+def validate_exports_consistency(repo_root: Path) -> list[str]:
+    """R1.1: Valida que los nombres en __all__ estén definidos o importados.
+    
+    Detecta exports inconsistentes: __all__ declara 'X' pero no existe en el archivo.
+    """
+    violations: list[str] = []
+    for path in py_files_under_src(repo_root):
+        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        
+        all_exports = get_all_exports(tree)
+        if all_exports is None:
+            continue  # No tiene __all__, no aplica
+        
+        defined = get_defined_names(tree)
+        imported = get_imported_names(tree)
+        available = defined | imported
+        
+        for export in all_exports:
+            if export not in available:
+                violations.append(f"{rel}:inconsistent_export:__all__ declares '{export}' but not defined or imported")
+    
+    return violations
+
+
+def validate_reexport_pattern(repo_root: Path) -> list[str]:
+    """R1.3: Valida patrones de re-export correctos.
+    
+    Detecta:
+    - Archivos que solo re-exportan pero no importan lo que declaran en __all__
+    - __all__ vacío o con elementos que no son re-exportados
+    """
+    violations: list[str] = []
+    for path in py_files_under_src(repo_root):
+        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        
+        all_exports = get_all_exports(tree)
+        if all_exports is None:
+            continue
+        
+        # Si tiene __all__ pero está vacío, es un problema
+        if len(all_exports) == 0:
+            violations.append(f"{rel}:empty_export:__all__ is empty")
+            continue
+        
+        # Verificar que los elementos de __all__ sean importados (re-export)
+        imported = get_imported_names(tree)
+        defined = get_defined_names(tree)
+        
+        for export in all_exports:
+            # Si está importado, es un re-export válido
+            if export in imported:
+                continue
+            # Si está definido en el archivo, también es válido
+            if export in defined:
+                continue
+            # Si no está ni importado ni definido, es un re-export roto
+            violations.append(f"{rel}:broken_reexport:'{export}' in __all__ but not imported from submodule")
+    
+    return violations
+
+
 def validate_python_policy(repo_root: Path, missing_inits: list[str]) -> Dict[str, object]:
     init_non_empty = validate_init_empty(repo_root)
     path_docstring_violations = validate_path_docstring(repo_root)
     import_order_violations = validate_import_order(repo_root)
     dataclass_violations = validate_no_dataclass(repo_root)
+    exports_consistency_violations = validate_exports_consistency(repo_root)
+    reexport_pattern_violations = validate_reexport_pattern(repo_root)
     violations: list[str] = []
     violations += [f"missing_init:{x}" for x in missing_inits]
     violations += [f"non_empty_init:{x}" for x in init_non_empty]
     violations += path_docstring_violations
     violations += import_order_violations
     violations += dataclass_violations
+    violations += exports_consistency_violations
+    violations += reexport_pattern_violations
     return {
         "ok": len(violations) == 0,
         "missing_init": missing_inits,
@@ -1309,6 +1429,8 @@ def validate_python_policy(repo_root: Path, missing_inits: list[str]) -> Dict[st
         "path_docstring_violations": path_docstring_violations,
         "import_order_violations": import_order_violations,
         "dataclass_violations": dataclass_violations,
+        "exports_consistency_violations": exports_consistency_violations,
+        "reexport_pattern_violations": reexport_pattern_violations,
         "violations": violations,
     }
 
