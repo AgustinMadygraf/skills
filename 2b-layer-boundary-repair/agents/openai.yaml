@@ -1,0 +1,7 @@
+interface:
+  display_name: "2b Layer Boundary Repair"
+  short_description: "Repara fronteras entre capas (fixes mecanicos)"
+  default_prompt: "Use $2b-layer-boundary-repair to fix layer boundary issues."
+
+policy:
+  allow_implicit_invocation: false

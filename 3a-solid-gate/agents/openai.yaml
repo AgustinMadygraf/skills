@@ -1,0 +1,7 @@
+interface:
+  display_name: "3a SOLID Gate"
+  short_description: "Valida principios SOLID-lite: SRP, DIP, ISP"
+  default_prompt: "Use $3a-solid-gate to validate SOLID principles."
+
+policy:
+  allow_implicit_invocation: false

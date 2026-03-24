@@ -1,26 +1,28 @@
 ---
 name: 3a-ports-contract-audit
-description: "Auditoria de contratos/puertos: naming, ubicacion y dependencias desde use_cases, con salida en docs/todo.md."
+description: "[DEPRECATED] Auditoria de contratos/puertos. Usar 4a-ports-contract-audit."
+maturity: deprecated
 ---
 
-# Ports Contract Audit
+# ⚠️ DEPRECATED - Ports Contract Audit
 
-Skill de auditoria enfocada en puertos y contratos de arquitectura.
+**Esta skill esta deprecada.** Se movio a la fase 4:
 
-## Activacion
+- **Fase 4**: [`4a-ports-contract-audit`](../4a-ports-contract-audit/SKILL.md) - Auditoria de contratos/puertos
 
-- Uso explicito unicamente: `$3a-ports-contract-audit`.
+## Motivo de reenumeracion
 
-## Comando
+La numeracion se ajusto para reflejar mejor el orden de aplicacion:
+- Fase 2: Layer boundaries
+- Fase 3: SOLID
+- Fase 4: Ports/Contracts (depende de que las capas y SOLID esten correctos)
+
+## Migracion
 
 ```bash
+# Antes (deprecated)
 python ~/.codex/skills/3a-ports-contract-audit/scripts/ports_contract_audit.py --repo-root .
+
+# Ahora (nuevo)
+python ~/.codex/skills/4a-ports-contract-audit/scripts/ports_contract_audit.py --repo-root .
 ```
-
-## Resultado
-
-- Solo genera/actualiza/modifica `docs/todo.md`.
-- Verifica:
-  - contratos en `src/interface_adapters/gateways/`
-  - imports de `use_cases` hacia puertos (no concretos)
-  - consistencia minima de naming de puertos.

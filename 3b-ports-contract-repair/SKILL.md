@@ -1,31 +1,28 @@
 ---
 name: 3b-ports-contract-repair
-description: "Repair de contratos/puertos: aplica fixes mecanicos de bajo riesgo y actualiza docs/todo.md."
+description: "[DEPRECATED] Repair de contratos/puertos. Usar 4b-ports-contract-repair."
+maturity: deprecated
 ---
 
-# Ports Contract Repair
+# ⚠️ DEPRECATED - Ports Contract Repair
 
-Skill de reparacion acotada para hallazgos de contratos y puertos.
+**Esta skill esta deprecada.** Se movio a la fase 4:
 
-## Activacion
+- **Fase 4**: [`4b-ports-contract-repair`](../4b-ports-contract-repair/SKILL.md) - Repair de contratos/puertos
 
-- Uso explicito unicamente: `$3b-ports-contract-repair`.
+## Motivo de reenumeracion
 
-## Comando
+La numeracion se ajusto para reflejar mejor el orden de aplicacion:
+- Fase 2: Layer boundaries
+- Fase 3: SOLID
+- Fase 4: Ports/Contracts (depende de que las capas y SOLID esten correctos)
+
+## Migracion
 
 ```bash
-# Recomendado: primero dry-run
+# Antes (deprecated)
 python ~/.codex/skills/3b-ports-contract-repair/scripts/ports_contract_repair.py --repo-root .
 
-# Aplicar cambios mecanicos
-python ~/.codex/skills/3b-ports-contract-repair/scripts/ports_contract_repair.py --repo-root . --apply
+# Ahora (nuevo)
+python ~/.codex/skills/4b-ports-contract-repair/scripts/ports_contract_repair.py --repo-root .
 ```
-
-## Resultado
-
-- Aplica solo reparaciones mecanicas y deterministas (bajo riesgo).
-- Ejemplos de fixes:
-  - crea `src/interface_adapters/gateways/` si falta
-  - crea `src/interface_adapters/gateways/__init__.py` si falta
-- Re-audita y actualiza `docs/todo.md` con el estado posterior.
-- Hallazgos ambiguos o no deterministas quedan en `docs/todo.md`.

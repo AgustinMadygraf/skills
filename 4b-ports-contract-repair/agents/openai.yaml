@@ -1,0 +1,7 @@
+interface:
+  display_name: "4b Ports Contract Repair"
+  short_description: "Repara contratos/puertos (fixes mecanicos)"
+  default_prompt: "Use $4b-ports-contract-repair to fix port contract issues."
+
+policy:
+  allow_implicit_invocation: false

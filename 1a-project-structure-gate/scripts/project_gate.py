@@ -120,6 +120,46 @@ def write_if_missing(path: Path, content: str, force: bool) -> bool:
     return True
 
 
+def dir_has_files(repo_root: Path, dir_path: str) -> bool:
+    """Verifica si un directorio tiene archivos (excluyendo .gitkeep)."""
+    d = repo_root / dir_path
+    if not d.is_dir():
+        return False
+    for item in d.iterdir():
+        if item.is_file() and item.name != ".gitkeep":
+            return True
+    return False
+
+
+def dir_is_empty(repo_root: Path, dir_path: str) -> bool:
+    """Verifica si un directorio está vacío (necesita .gitkeep).
+    
+    Un directorio está vacío si:
+    - No tiene archivos (excluyendo .gitkeep)
+    - No tiene subdirectorios con contenido (vacío recursivamente)
+    
+    Equivalente a: find . -type d -empty
+    """
+    d = repo_root / dir_path
+    if not d.is_dir():
+        return False
+    
+    for item in d.iterdir():
+        if item.name == ".gitkeep":
+            continue
+        if item.is_file():
+            # Tiene archivos reales
+            return False
+        if item.is_dir():
+            # Tiene subdirectorio - verificar si está vacío recursivamente
+            if not dir_is_empty(repo_root, str(item.relative_to(repo_root))):
+                # El subdirectorio tiene contenido, este directorio no está vacío
+                return False
+    
+    # No tiene archivos ni subdirectorios con contenido
+    return True
+
+
 def validate_layout_policy(repo_root: Path) -> Dict[str, object]:
     missing_dirs = [d for d in DIRS if not (repo_root / d).is_dir()]
     missing_files = [f for f in REQUIRED_FILES if not (repo_root / f).is_file()]
@@ -132,7 +172,11 @@ def validate_layout_policy(repo_root: Path) -> Dict[str, object]:
                 gitignore_has_tmp = True
                 break
 
-    missing_gitkeep = [d for d in GITKEEP_DIRS if not (repo_root / d / ".gitkeep").is_file()]
+    # Solo reportar .gitkeep faltante si el directorio está vacío (sin archivos ni subdirs con contenido)
+    missing_gitkeep = [
+        d for d in GITKEEP_DIRS
+        if not (repo_root / d / ".gitkeep").is_file() and dir_is_empty(repo_root, d)
+    ]
     infra_gitkeeps = [
         str(p.relative_to(repo_root))
         for p in (repo_root / "src" / "infrastructure").rglob(".gitkeep")
@@ -181,7 +225,12 @@ def py_files_under_src(repo_root: Path) -> list[Path]:
 def ensure_init_files(repo_root: Path, force: bool, check_mode: bool) -> tuple[list[str], list[str]]:
     created: list[str] = []
     missing: list[str] = []
-    for d in src_dirs(repo_root):
+    # Solo crear __init__.py en directorios pre-establecidos (DIRS + src/)
+    dirs_for_init = ["src"] + [d for d in DIRS if d.startswith("src/")]
+    for dir_path in dirs_for_init:
+        d = repo_root / dir_path
+        if not d.is_dir():
+            continue
         init_path = d / "__init__.py"
         rel = str(init_path.relative_to(repo_root))
         if init_path.exists():
@@ -195,12 +244,26 @@ def ensure_init_files(repo_root: Path, force: bool, check_mode: bool) -> tuple[l
 
 
 def validate_init_empty(repo_root: Path) -> list[str]:
+    """Valida que __init__.py estén vacíos, excepto si tienen exports intencionales.
+    
+    Preserva __init__.py que:
+    - Tengan __all__ (exports explícitos de API pública)
+    - Tengan imports de submódulos (re-exports)
+    """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
         if path.name != "__init__.py":
             continue
-        if path.read_text(encoding="utf-8", errors="ignore").strip() != "":
-            violations.append(str(path.relative_to(repo_root)))
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if text.strip() == "":
+            continue
+        # Preservar si tiene exports intencionales (misma lógica que 1b)
+        if "__all__" in text:
+            continue
+        # Preservar si tiene imports de re-export
+        if "from ." in text or "from src." in text or "import src." in text:
+            continue
+        violations.append(str(path.relative_to(repo_root)))
     return violations
 
 
@@ -405,15 +468,39 @@ def ensure_gitignore_tmp(repo_root: Path) -> bool:
 
 
 def validate_no_dataclass(repo_root: Path) -> list[str]:
+    """Valida uso de dataclasses según capa.
+    
+    Política:
+    - entities/: PERMITIDO (DTOs/Value Objects legítimos)
+    - use_cases/: PROHIBIDO (lógica de negocio, usar clases normales)
+    - interface_adapters/: PROHIBIDO (adaptadores, usar clases normales)
+    - infrastructure/: PERMITIDO (configuración, data classes de infraestructura)
+    """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
         rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        
+        # Determinar capa
+        in_entities = rel.startswith("src/entities/")
+        in_use_cases = rel.startswith("src/use_cases/")
+        in_interface_adapters = rel.startswith("src/interface_adapters/")
+        in_infrastructure = rel.startswith("src/infrastructure/")
+        
+        # Permitir dataclasses en entities e infrastructure
+        if in_entities or in_infrastructure:
+            continue
+            
+        # Prohibir en use_cases e interface_adapters
+        if not (in_use_cases or in_interface_adapters):
+            # Archivo suelto en src/ u otra ubicación no estándar
+            continue
+            
         text = path.read_text(encoding="utf-8", errors="ignore")
         if "from dataclasses import dataclass" in text:
-            violations.append(f"{rel}:forbidden_dataclass_import")
+            violations.append(f"{rel}:forbidden_dataclass_import_in_business_layer")
             continue
         if "@dataclass" in text:
-            violations.append(f"{rel}:forbidden_dataclass_decorator")
+            violations.append(f"{rel}:forbidden_dataclass_decorator_in_business_layer")
             continue
     return violations
 
@@ -1465,9 +1552,11 @@ def main() -> int:
                 created_dirs.append(rel)
 
         for rel in GITKEEP_DIRS:
-            p = repo_root / rel / ".gitkeep"
-            if write_if_missing(p, "", args.force):
-                created_files.append(str(p.relative_to(repo_root)))
+            # Solo crear .gitkeep si el directorio está vacío
+            if dir_is_empty(repo_root, rel):
+                p = repo_root / rel / ".gitkeep"
+                if write_if_missing(p, "", args.force):
+                    created_files.append(str(p.relative_to(repo_root)))
 
         readme_content = (
             "<!-- Path: README.md -->\n"

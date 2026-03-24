@@ -1,0 +1,7 @@
+interface:
+  display_name: "3b SOLID Refactor Assistant"
+  short_description: "Asiste en refactor SOLID guiado sin autofix ciego"
+  default_prompt: "Use $3b-solid-refactor-assistant to plan SOLID refactors."
+
+policy:
+  allow_implicit_invocation: false

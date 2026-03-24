@@ -14,11 +14,14 @@ Skill de reparacion para bootstrap y estructura base.
 ## Comando
 
 ```bash
-python ~/.codex/skills/1a-project-structure-gate/scripts/project_gate.py --repo-root . --structure-gate-only --fix-python
+python ~/.config/agents/skills/0b-project-bootstrap-repair/scripts/bootstrap_repair.py --repo-root .
 ```
 
 ## Resultado
 
-- Repara faltantes de estructura base.
-- Normaliza python-file policy mecanica (Path/import order/__init__) cuando aplique.
-- Si quedan violaciones, las deja reflejadas en `docs/todo.md`.
+- Crea directorios base faltantes.
+- Crea archivos esenciales faltantes (run.py, README.md, .env, .env.example, logger.py, config.py).
+- Crea `__init__.py` faltantes en `src/`.
+- Crea `.gitkeep` solo en directorios vacios que lo requieran.
+- Agrega `.tmp/` a `.gitignore` si falta.
+- Si quedan violaciones complejas, se registran en `docs/todo.md`.

@@ -1,0 +1,7 @@
+interface:
+  display_name: "2a Layer Boundary Gate"
+  short_description: "Valida fronteras entre capas de Clean Architecture"
+  default_prompt: "Use $2a-layer-boundary-gate to validate layer boundaries."
+
+policy:
+  allow_implicit_invocation: false

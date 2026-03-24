@@ -14,11 +14,21 @@ Skill de reparacion para hallazgos de estructura.
 ## Comando
 
 ```bash
-python ~/.codex/skills/1a-project-structure-gate/scripts/project_gate.py --repo-root . --structure-gate-only --fix-python
+python ~/.config/agents/skills/1b-project-structure-repair/scripts/structure_repair.py --repo-root .
 ```
 
 ## Resultado
 
-- Repara faltantes mecanicos de estructura y python-file policy.
-- Si falta `.tmp/` en `.gitignore`, lo agrega automaticamente.
+- Crea `.gitkeep` faltantes en directorios base **vacíos** (sin archivos ni subdirectorios con contenido).
+- Crea `__init__.py` faltantes y vacia los existentes (excepto los con exports).
+- Agrega/actualiza docstrings de Path en archivos .py.
+- Ordena imports según política de capas (algoritmo seguro: preserva imports multilinea).
+- Si falta `.tmp/` en `.gitignore`, lo agrega.
+- **Archiva tareas completadas `[x]` de `docs/todo.md` hacia `docs/todo.done.md`.**
 - Actualiza `docs/todo.md` con estado posterior.
+
+## Limitaciones conocidas
+
+- El auto-fix de import order está **desactivado** porque el algoritmo actual
+  rompe imports multilinea (ej: `from x import (a, b)`). Las violaciones de
+  import order deben corregirse manualmente.

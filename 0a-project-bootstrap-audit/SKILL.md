@@ -14,10 +14,16 @@ Skill de auditoria de bootstrap inicial.
 ## Comando
 
 ```bash
-python ~/.codex/skills/1a-project-structure-gate/scripts/project_gate.py --repo-root . --bootstrap-gate-only --check
+python ~/.config/agents/skills/0a-project-bootstrap-audit/scripts/bootstrap_gate.py --repo-root . --check
 ```
 
 ## Resultado
 
 - Audita estado minimo de bootstrap (estructura base/layout) sin modificar codigo.
 - Solo genera/actualiza/modifica `docs/todo.md`.
+
+## Validaciones
+
+- **Layout**: Directorios base, archivos esenciales, `.gitkeep` solo en dirs vacios
+- **Env**: Existencia de `.env` y `.env.example`, paridad basica de keys
+- **Python**: `__init__.py` en todos los directorios bajo `src/`

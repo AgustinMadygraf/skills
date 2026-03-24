@@ -1,59 +1,25 @@
 ---
 name: 2b-architecture-refactor-assistant
-description: "Asistente de refactor arquitectonico guiado para resolver hallazgos de layer-boundary sin autofix ciego."
+description: "[DEPRECATED] Asistente de refactor arquitectonico. Usar 3b-solid-refactor-assistant."
+maturity: deprecated
 ---
 
-# Architecture Refactor Assistant
+# ⚠️ DEPRECATED - Architecture Refactor Assistant
 
-Skill para ejecutar refactors arquitectonicos de manera explicita y segura.
+**Esta skill esta deprecada.** Se reemplazo por:
 
-## Activacion
+- **Fase 3**: [`3b-solid-refactor-assistant`](../3b-solid-refactor-assistant/SKILL.md) - Asistente de refactor SOLID
 
-- Uso explicito unicamente: `$2b-architecture-refactor-assistant`.
+## Motivo de deprecacion
 
-## Objetivo
+La skill original estaba acoplada a la skill 2a deprecada. El nuevo flujo de refactor SOLID esta en la fase 3.
 
-- Tomar hallazgos de `docs/todo.md` (especialmente `layer-boundary`).
-- Proponer refactor por lotes pequenos con impacto acotado.
-- Aplicar cambios solo con trazabilidad y validacion posterior.
-
-## Comando recomendado
+## Migracion
 
 ```bash
+# Antes (deprecated)
 python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/generate_refactor_plan.py --repo-root .
+
+# Ahora (nuevo)
+python ~/.codex/skills/3b-solid-refactor-assistant/scripts/generate_solid_refactor_plan.py --repo-root .
 ```
-
-Salida principal:
-
-- `docs/refactor/architecture-refactor-plan.md`
-
-## Sugerencias de patch (sin aplicar)
-
-```bash
-python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/generate_patch_suggestions.py --repo-root .
-```
-
-Salida principal:
-
-- `docs/refactor/architecture-patch-suggestions.md`
-
-## Decidir que crear ahora
-
-```bash
-python ~/.codex/skills/2b-architecture-refactor-assistant/scripts/decide_layer.py --repo-root . --change "descripcion del cambio"
-```
-
-Salida:
-
-- capa recomendada (`entities`, `use_cases`, `gateways`, `controllers`, `presenters`, `infrastructure`)
-- ruta sugerida
-- dependencias permitidas/prohibidas
-
-## Reglas
-
-- No hacer autofix masivo ciego.
-- No cambiar comportamiento funcional sin justificar.
-- Priorizar mover dependencias hacia puertos/adapters correctos.
-- Luego del refactor, re-ejecutar:
-  - `$1a-project-structure-gate`
-  - `$2a-project-architecture-gate`
