@@ -26,5 +26,20 @@ python ~/.config/agents/skills/1a-project-structure-gate/scripts/structure_gate.
 - **Preserva `__init__.py` con `__all__` o imports de re-export (API pública).**
 - Exige docstrings de Path al inicio de cada archivo.
 - Exige orden de imports segun politica de capas.
-- **Prohíbe dataclasses en `use_cases/` e `interface_adapters/` (lógica de negocio), permite en `entities/` (DTOs) e `infrastructure/` (config).**
+- **Política granular de dataclasses (Clean Architecture):**
+  - ✅ `entities/`: Permitido (Value Objects, entidades)
+  - ✅ `infrastructure/`: Permitido (configuración, settings)
+  - ❌ `use_cases/`: Prohibido (siempre comportamiento)
+  - ⚡ `interface_adapters/`: **Condicional**
+    - ✅ **Permitido** si es DTO (sufijos permitidos, singular o plural):
+      - `_model.py` / `_models.py` (ej: `request_model.py`, `request_models.py`)
+      - `_dto.py` / `_dtos.py`
+      - `_request.py` / `_requests.py`
+      - `_response.py` / `_responses.py`
+      - `_view_model.py` / `_view_models.py`
+      - `_vm.py` / `_vms.py`
+    - ❌ **Prohibido** si es adaptador con comportamiento (ej: `*_presenter.py`, `*_controller.py`)
+  
+  *Rationale: Los DTOs (Request/Response Models, ViewModels) son datos de serialización y SÍ pueden usar dataclasses. Se aceptan sufijos plurales siguiendo convención FastAPI (ej: `schemas.py`, `models.py`). Los adaptadores con comportamiento deben usar clases normales (SRP).*
+- Actualiza `docs/todo.md` con violaciones detectadas.
 - Actualiza `docs/todo.md` con violaciones detectadas.

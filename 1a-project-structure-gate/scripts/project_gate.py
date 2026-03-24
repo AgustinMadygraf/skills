@@ -467,18 +467,66 @@ def ensure_gitignore_tmp(repo_root: Path) -> bool:
     return True
 
 
-def validate_no_dataclass(repo_root: Path) -> list[str]:
-    """Valida uso de dataclasses según capa.
+def is_dto_file(filename: str) -> bool:
+    """Detecta si un archivo es un DTO por convención de nombre.
     
-    Política:
-    - entities/: PERMITIDO (DTOs/Value Objects legítimos)
-    - use_cases/: PROHIBIDO (lógica de negocio, usar clases normales)
-    - interface_adapters/: PROHIBIDO (adaptadores, usar clases normales)
-    - infrastructure/: PERMITIDO (configuración, data classes de infraestructura)
+    DTOs (Data Transfer Objects) son datos puros que cruzan límites de capa.
+    Por convención (FastAPI, Clean Architecture), identificamos DTOs por sufijos
+    en el nombre de archivo. Se aceptan tanto formas singulares como plurales:
+    
+    Singular:              Plural (común cuando hay múltiples DTOs):
+    - *_model.py           - *_models.py       (ej: request_models.py)
+    - *_dto.py             - *_dtos.py         (ej: shared_dtos.py)
+    - *_request.py         - *_requests.py     (ej: api_requests.py)
+    - *_response.py        - *_responses.py    (ej: api_responses.py)
+    - *_view_model.py      - *_view_models.py  (ej: list_view_models.py)
+    - *_vm.py              - *_vms.py          (abreviado, raro)
+    
+    Referencias:
+    - FastAPI docs: schemas.py (plural) para Pydantic models
+    - FastAPI Best Practices: schemas.py por dominio
+    - Clean Architecture: Request/Response Models como DTOs de frontera
+    """
+    dto_suffixes = (
+        # Singulares
+        "_model.py",
+        "_dto.py",
+        "_request.py",
+        "_response.py",
+        "_view_model.py",
+        "_vm.py",
+        # Plurales (convención cuando hay múltiples DTOs en un archivo)
+        "_models.py",
+        "_dtos.py",
+        "_requests.py",
+        "_responses.py",
+        "_view_models.py",
+        "_vms.py",
+    )
+    return filename.endswith(dto_suffixes)
+
+
+def validate_no_dataclass(repo_root: Path) -> list[str]:
+    """Valida uso de dataclasses según capa (política granular).
+    
+    Política (Clean Architecture):
+    - entities/: PERMITIDO (Value Objects, entidades simples)
+    - infrastructure/: PERMITIDO (configuración, settings, adaptadores de infra)
+    - use_cases/: PROHIBIDO (siempre comportamiento, nunca solo datos)
+    - interface_adapters/: 
+        * PERMITIDO si es DTO (por nombre: *_model.py, *_dto.py, *_request.py, etc.)
+        * PROHIBIDO si es adaptador con comportamiento (*presenter.py, *controller.py, etc.)
+    
+    Rationale:
+    - Los DTOs que cruzan límites (Request/Response Models) SÍ pueden ser dataclasses
+      porque son datos inmutables de serialización/deserialización.
+    - Los adaptadores con comportamiento (orquestan, transforman, validan) NO deben
+      ser dataclasses (SRP: separar datos de comportamiento).
     """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
         rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        filename = path.name
         
         # Determinar capa
         in_entities = rel.startswith("src/entities/")
@@ -486,21 +534,34 @@ def validate_no_dataclass(repo_root: Path) -> list[str]:
         in_interface_adapters = rel.startswith("src/interface_adapters/")
         in_infrastructure = rel.startswith("src/infrastructure/")
         
-        # Permitir dataclasses en entities e infrastructure
+        # Permitir dataclasses en entities e infrastructure (sin restricciones)
         if in_entities or in_infrastructure:
             continue
-            
-        # Prohibir en use_cases e interface_adapters
-        if not (in_use_cases or in_interface_adapters):
+        
+        # En interface_adapters: distinguir DTOs de adaptadores con comportamiento
+        if in_interface_adapters:
+            if is_dto_file(filename):
+                # Es un DTO (Request Model, Response Model, ViewModel) → Permitido
+                continue
+            # Es un adaptador con comportamiento → Prohibido
+            pass
+        elif not in_use_cases:
             # Archivo suelto en src/ u otra ubicación no estándar
             continue
-            
+        
+        # Prohibir dataclasses en use_cases y en adaptadores de interface_adapters (no DTOs)
         text = path.read_text(encoding="utf-8", errors="ignore")
         if "from dataclasses import dataclass" in text:
-            violations.append(f"{rel}:forbidden_dataclass_import_in_business_layer")
+            if in_interface_adapters:
+                violations.append(f"{rel}:forbidden_dataclass_in_adapter_use_dto_suffix")
+            else:
+                violations.append(f"{rel}:forbidden_dataclass_in_use_case")
             continue
         if "@dataclass" in text:
-            violations.append(f"{rel}:forbidden_dataclass_decorator_in_business_layer")
+            if in_interface_adapters:
+                violations.append(f"{rel}:forbidden_dataclass_in_adapter_use_dto_suffix")
+            else:
+                violations.append(f"{rel}:forbidden_dataclass_in_use_case")
             continue
     return violations
 

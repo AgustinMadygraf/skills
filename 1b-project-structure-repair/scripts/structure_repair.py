@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Script de repair de estructura.
-Corrige env/layout/python-file policy.
+Path: 1b-project-structure-repair/scripts/structure_repair.py
+Script de repair de estructura - ENFOQUE REACTIVO basado en docs/todo.md.
+
+Este script NO detecta violaciones por sí mismo, sino que lee las detectadas
+por 1a-project-structure-gate desde docs/todo.md y ejecuta las reparaciones.
 """
 from __future__ import annotations
 
@@ -10,16 +13,256 @@ import ast
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
+from datetime import datetime
 
 
-def src_dirs(repo_root: Path) -> list[Path]:
-    """Lista todos los directorios bajo src/."""
-    root = repo_root / "src"
-    if not root.is_dir():
-        return []
-    return sorted([p for p in root.rglob("*") if p.is_dir()] + [root])
+# Marcadores de sección en docs/todo.md
+TODO_AUTOGEN_START = "<!-- project-gates:auto:start -->"
+TODO_AUTOGEN_END = "<!-- project-gates:auto:end -->"
 
+
+def parse_todo_items(repo_root: Path) -> Dict[str, List[str]]:
+    """Parsea docs/todo.md y extrae items pendientes por categoría.
+    
+    Returns:
+        Dict con claves: 'bootstrap-policy', 'env-policy', 'layout-policy', 
+        'python-file-policy', 'layer-boundary', 'solid-lite', 'solid-strict'
+    """
+    todo_path = repo_root / "docs" / "todo.md"
+    items_by_type: Dict[str, List[str]] = {
+        "bootstrap-policy": [],
+        "env-policy": [],
+        "layout-policy": [],
+        "python-file-policy": [],
+        "layer-boundary": [],
+        "solid-lite": [],
+        "solid-strict": [],
+        "solid-thresholds": [],
+        "architecture-exemptions": [],
+    }
+    
+    if not todo_path.exists():
+        return items_by_type
+    
+    content = todo_path.read_text(encoding="utf-8", errors="ignore")
+    
+    # Buscar sección autogenerada
+    start = content.find(TODO_AUTOGEN_START)
+    end = content.find(TODO_AUTOGEN_END)
+    
+    if start == -1 or end == -1 or end <= start:
+        return items_by_type
+    
+    section = content[start:end]
+    
+    # Parsear items pendientes (solo - [ ], no - [x])
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("- [ ]"):
+            continue
+        
+        # Extraer tipo de política
+        match = re.search(r'\[([^\]]+policy)\]', line)
+        if match:
+            policy_type = match.group(1)
+            if policy_type in items_by_type:
+                items_by_type[policy_type].append(line)
+        
+        # Extraer layer-boundary, solid-lite, etc.
+        match = re.search(r'\[(layer-boundary|solid-lite|solid-strict|solid-thresholds|architecture-exemptions)', line)
+        if match:
+            policy_type = match.group(1)
+            items_by_type[policy_type].append(line)
+    
+    return items_by_type
+
+
+def extract_violation_detail(line: str) -> Optional[str]:
+    """Extrae el detalle de una violación desde una línea de todo.md."""
+    # Buscar patrones comunes
+    match = re.search(r'Resolver:\s*`([^`]+)`', line)
+    if match:
+        return match.group(1)
+    
+    match = re.search(r'Agregar\s*`([^`]+)`', line)
+    if match:
+        return match.group(1)
+    
+    match = re.search(r'Corregir[^:]+:\s*`([^`]+)`', line)
+    if match:
+        return match.group(1)
+    
+    match = re.search(r'`([^`]+:\d+:[^`]+)`', line)
+    if match:
+        return match.group(1)
+    
+    return None
+
+
+# ============================================================================
+# REPARACIONES POR TIPO
+# ============================================================================
+
+def repair_layout_policy(repo_root: Path, items: List[str]) -> Dict[str, List[str]]:
+    """Repara violaciones de layout-policy (bootstrap-policy incluido)."""
+    results = {"created_gitkeep": [], "created_dirs": [], "created_files": []}
+    
+    gitkeep_dirs = ["src/entities", "src/use_cases", "src/interface_adapters/presenters", 
+                    "src/interface_adapters/gateways", "docs", "tests"]
+    
+    for item in items:
+        detail = extract_violation_detail(item)
+        if not detail:
+            continue
+        
+        # missing_gitkeep
+        if "missing_gitkeep" in detail:
+            dir_path = detail.split(":")[1].replace("/.gitkeep", "")
+            if dir_path in gitkeep_dirs:
+                gitkeep_path = repo_root / dir_path / ".gitkeep"
+                if not gitkeep_path.exists() and dir_is_empty(repo_root, dir_path):
+                    gitkeep_path.parent.mkdir(parents=True, exist_ok=True)
+                    gitkeep_path.write_text("", encoding="utf-8", newline="\n")
+                    results["created_gitkeep"].append(f"{dir_path}/.gitkeep")
+        
+        # missing_dir
+        elif "missing_dir" in detail:
+            dir_path = detail.split(":")[1]
+            target = repo_root / dir_path
+            if not target.exists():
+                target.mkdir(parents=True, exist_ok=True)
+                results["created_dirs"].append(dir_path)
+        
+        # missing_file
+        elif "missing_file" in detail:
+            file_path = detail.split(":")[1]
+            # Nota: archivos esenciales como README.md, .env deben crearse manualmente
+            pass
+    
+    return results
+
+
+def repair_env_policy(repo_root: Path, items: List[str]) -> Dict[str, int]:
+    """Repara violaciones de env-policy (sincronización de keys)."""
+    results = {"added_to_example": 0, "added_to_env": 0}
+    
+    env_path = repo_root / ".env"
+    env_example_path = repo_root / ".env.example"
+    
+    if not env_path.exists() or not env_example_path.exists():
+        return results
+    
+    env_content = env_path.read_text(encoding="utf-8", errors="ignore")
+    example_content = env_example_path.read_text(encoding="utf-8", errors="ignore")
+    
+    env_keys = set(re.findall(r'^([A-Z_][A-Z0-9_]*)=', env_content, re.MULTILINE))
+    example_keys = set(re.findall(r'^([A-Z_][A-Z0-9_]*)=', example_content, re.MULTILINE))
+    
+    for item in items:
+        if "Agregar" in item and "a `.env.example`" in item:
+            match = re.search(r'`([^`]+)`', item)
+            if match:
+                key = match.group(1)
+                if key in env_keys and key not in example_keys:
+                    # Extraer valor de .env
+                    val_match = re.search(rf'^{key}=(.+)$', env_content, re.MULTILINE)
+                    if val_match:
+                        value = val_match.group(1)
+                        # Agregar a .env.example con valor placeholder si es secreto
+                        if any(s in key.lower() for s in ['secret', 'password', 'token', 'key']):
+                            placeholder = "your_" + key.lower() + "_here"
+                        else:
+                            placeholder = value
+                        
+                        with open(env_example_path, "a", encoding="utf-8") as f:
+                            f.write(f"\n{key}={placeholder}")
+                        results["added_to_example"] += 1
+        
+        elif "Agregar" in item and "a `.env`" in item:
+            match = re.search(r'`([^`]+)`', item)
+            if match:
+                key = match.group(1)
+                if key in example_keys and key not in env_keys:
+                    # Extraer valor de .env.example
+                    val_match = re.search(rf'^{key}=(.+)$', example_content, re.MULTILINE)
+                    if val_match:
+                        value = val_match.group(1)
+                        with open(env_path, "a", encoding="utf-8") as f:
+                            f.write(f"\n{key}={value}")
+                        results["added_to_env"] += 1
+    
+    return results
+
+
+def repair_python_file_policy(repo_root: Path, items: List[str]) -> Dict[str, List[str]]:
+    """Repara violaciones de python-file-policy."""
+    results = {
+        "fixed_imports": [],
+        "fixed_docstrings": [],
+        "removed_unused_imports": {},
+        "emptied_init": []
+    }
+    
+    # Agrupar violaciones por archivo
+    files_with_import_order = set()
+    files_with_docstring = set()
+    files_with_unused = set()
+    files_with_non_empty_init = set()
+    
+    for item in items:
+        detail = extract_violation_detail(item)
+        if not detail:
+            continue
+        
+        if ":import_order_invalid" in detail or ":unknown_src_import_group" in detail:
+            file = detail.split(":")[0]
+            files_with_import_order.add(file)
+        
+        elif ":missing_path_docstring" in detail or ":path_mismatch" in detail:
+            file = detail.split(":")[0]
+            files_with_docstring.add(file)
+        
+        elif "non_empty_init" in detail or "forbidden_dataclass" in detail:
+            file = detail.split(":")[0] if ":" in detail else detail.replace("non_empty_init:", "")
+            if "__init__.py" in file:
+                files_with_non_empty_init.add(file)
+    
+    # Reparar orden de imports
+    for rel_path in files_with_import_order:
+        path = repo_root / rel_path
+        if path.exists() and normalize_import_order_for_file(path):
+            results["fixed_imports"].append(rel_path)
+    
+    # Reparar docstrings
+    for rel_path in files_with_docstring:
+        path = repo_root / rel_path
+        if path.exists():
+            if ensure_path_docstring_for_file(path, rel_path):
+                results["fixed_docstrings"].append(rel_path)
+    
+    # Vaciar __init__.py no vacíos (sin exports)
+    for rel_path in files_with_non_empty_init:
+        path = repo_root / rel_path
+        if path.exists() and path.name == "__init__.py":
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            # Preservar si tiene exports intencionales
+            if "__all__" in text or "from ." in text or "from src." in text:
+                continue
+            if text.strip() != "":
+                path.write_text("", encoding="utf-8", newline="\n")
+                results["emptied_init"].append(rel_path)
+    
+    # Eliminar imports no usados en todos los archivos .py
+    removed = remove_unused_imports(repo_root)
+    results["removed_unused_imports"] = removed
+    
+    return results
+
+
+# ============================================================================
+# FUNCIONES AUXILIARES (mantenidas del script original)
+# ============================================================================
 
 def py_files_under_src(repo_root: Path) -> list[Path]:
     """Lista todos los archivos .py bajo src/."""
@@ -30,14 +273,7 @@ def py_files_under_src(repo_root: Path) -> list[Path]:
 
 
 def dir_is_empty(repo_root: Path, dir_path: str) -> bool:
-    """Verifica si un directorio está vacío (necesita .gitkeep).
-    
-    Un directorio está vacío si:
-    - No tiene archivos (excluyendo .gitkeep)
-    - No tiene subdirectorios con contenido (vacío recursivamente)
-    
-    Equivalente a: find . -type d -empty
-    """
+    """Verifica si un directorio está vacío (necesita .gitkeep)."""
     d = repo_root / dir_path
     if not d.is_dir():
         return False
@@ -46,86 +282,12 @@ def dir_is_empty(repo_root: Path, dir_path: str) -> bool:
         if item.name == ".gitkeep":
             continue
         if item.is_file():
-            # Tiene archivos reales
             return False
         if item.is_dir():
-            # Tiene subdirectorio - verificar si está vacío recursivamente
             if not dir_is_empty(repo_root, str(item.relative_to(repo_root))):
-                # El subdirectorio tiene contenido, este directorio no está vacío
                 return False
     
-    # No tiene archivos ni subdirectorios con contenido
     return True
-
-
-def normalize_init_files(repo_root: Path) -> list[str]:
-    """Vacía __init__.py que no tengan exports intencionales.
-    
-    Preserva __init__.py que:
-    - Tengan __all__ (exports explícitos)
-    - Tengan imports de submódulos (re-exports)
-    """
-    fixed: list[str] = []
-    for path in py_files_under_src(repo_root):
-        if path.name != "__init__.py":
-            continue
-        text = path.read_text(encoding="utf-8", errors="ignore")
-        if text.strip() == "":
-            continue
-        # Preservar si tiene exports intencionales
-        if "__all__" in text:
-            continue
-        # Preservar si tiene imports de otros módulos (re-exports)
-        if "from ." in text or "from src." in text or "import src." in text:
-            continue
-        path.write_text("", encoding="utf-8", newline="\n")
-        fixed.append(str(path.relative_to(repo_root)))
-    return fixed
-
-
-def ensure_path_docstring_for_file(path: Path, rel: str) -> bool:
-    """Asegura que el archivo tenga el docstring de Path al inicio."""
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    text = text.replace("\ufeff", "").replace("ï»¿", "")
-    expected = f'"""\nPath: {rel}\n"""'
-
-    def strip_one_leading_docstring(payload: str) -> tuple[str, str]:
-        s = payload.lstrip()
-        if not (s.startswith('"""') or s.startswith("'''")):
-            return payload, ""
-        quote = s[:3]
-        end = s.find(quote, 3)
-        if end == -1:
-            return payload, ""
-        header = s[3:end]
-        remainder = s[end + 3:]
-        return remainder, header
-
-    remainder, _first_header = strip_one_leading_docstring(text)
-    if remainder == text:
-        remainder = text
-    # Si hay un segundo docstring que parece Path header, también lo quitamos
-    rem2, second_header = strip_one_leading_docstring(remainder)
-    if rem2 != remainder and "Path:" in second_header:
-        remainder = rem2
-
-    new_text = expected + "\n\n" + remainder.lstrip("\n")
-    if new_text != text:
-        path.write_text(new_text, encoding="utf-8", newline="\n")
-        return True
-    return False
-
-
-def normalize_path_docstrings(repo_root: Path) -> list[str]:
-    """Normaliza los docstrings de Path en todos los archivos .py."""
-    fixed: list[str] = []
-    for path in py_files_under_src(repo_root):
-        if path.name == "__init__.py":
-            continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
-        if ensure_path_docstring_for_file(path, rel):
-            fixed.append(str(path.relative_to(repo_root)))
-    return fixed
 
 
 def import_rank(line: str) -> int:
@@ -145,7 +307,7 @@ def import_rank(line: str) -> int:
 
 
 def is_multiline_import_start(line: str) -> bool:
-    """Detecta si una línea es el inicio de un import multilinea (termina con '(')."""
+    """Detecta si una línea es el inicio de un import multilinea."""
     stripped = line.strip()
     if not (stripped.startswith("import ") or stripped.startswith("from ")):
         return False
@@ -153,11 +315,7 @@ def is_multiline_import_start(line: str) -> bool:
 
 
 def extract_import_blocks(lines: list[str], start_idx: int) -> tuple[list[tuple[int, str]], int]:
-    """Extrae bloques de imports, separando multilinea de unilinea.
-    
-    Returns:
-        Lista de (índice_original, línea_texto) y índice_final
-    """
+    """Extrae bloques de imports, separando multilinea de unilinea."""
     blocks: list[tuple[int, str]] = []
     i = start_idx
     
@@ -165,21 +323,17 @@ def extract_import_blocks(lines: list[str], start_idx: int) -> tuple[list[tuple[
         line = lines[i]
         stripped = line.strip()
         
-        # Fin del bloque de imports
         if stripped == "":
             i += 1
             continue
         if stripped.startswith("#"):
-            # Comentario dentro del bloque de imports - lo incluimos
             blocks.append((i, line))
             i += 1
             continue
         if not (stripped.startswith("import ") or stripped.startswith("from ")):
             break
         
-        # Detectar import multilinea
         if is_multiline_import_start(line):
-            # Es un import multilinea - lo tomamos completo tal cual
             multiline_block = [line]
             i += 1
             while i < len(lines):
@@ -188,10 +342,8 @@ def extract_import_blocks(lines: list[str], start_idx: int) -> tuple[list[tuple[
                     i += 1
                     break
                 i += 1
-            # Agregar como un solo bloque con índice del inicio
             blocks.append((i - len(multiline_block), "\n".join(multiline_block)))
         else:
-            # Import de una sola línea
             blocks.append((i, line))
             i += 1
     
@@ -199,14 +351,7 @@ def extract_import_blocks(lines: list[str], start_idx: int) -> tuple[list[tuple[
 
 
 def normalize_import_order_for_file(path: Path) -> bool:
-    """Ordena los imports de un archivo según el ranking (versión segura).
-    
-    Características de seguridad:
-    - Detecta y preserva imports multilinea intactos
-    - Solo reordena imports de una sola línea
-    - Mantiene comentarios asociados a imports
-    - Preserva el docstring de Path al inicio
-    """
+    """Ordena los imports de un archivo según el ranking (versión segura)."""
     text = path.read_text(encoding="utf-8", errors="ignore").replace("\ufeff", "").replace("ï»¿", "")
     lines = text.splitlines()
     if not lines:
@@ -230,144 +375,184 @@ def normalize_import_order_for_file(path: Path) -> bool:
                 break
             i += 1
 
-    # Saltar líneas vacías y comentarios sueltos antes de imports
     while i < len(lines) and (lines[i].strip() == "" or lines[i].strip().startswith("#")):
         i += 1
     start = i
     
-    # Si no hay imports, salir
     if i >= len(lines):
         return False
     if not (lines[i].strip().startswith("import ") or lines[i].strip().startswith("from ")):
         return False
 
-    # Extraer bloques de imports
     import_blocks, end = extract_import_blocks(lines, start)
     
     if len(import_blocks) <= 1:
         return False
     
-    # Separar imports unilinea vs multilinea
-    single_line_imports: list[tuple[int, str, str]] = []  # (idx, original, stripped)
-    multiline_imports: list[tuple[int, str]] = []  # (idx, content)
+    single_line_imports: list[tuple[int, str, str]] = []
+    multiline_imports: list[tuple[int, str]] = []
     
     for idx, content in import_blocks:
         stripped = content.strip()
         if "\n" in content:
-            # Es multilinea - preservar tal cual
             multiline_imports.append((idx, content))
         else:
-            # Es unilinea
             single_line_imports.append((idx, content, stripped))
     
-    # Si hay imports de grupo desconocido (rank 5), no tocar nada
     all_stripped = [s for _, _, s in single_line_imports]
     if any(import_rank(s) == 5 for s in all_stripped):
         return False
     
-    # Ordenar solo los imports unilinea
     single_line_imports.sort(key=lambda x: (import_rank(x[2]), x[2]))
     
-    # Reconstruir el bloque
-    # Intercalar multilinea manteniendo su posición relativa aproximada
-    # Estrategia: poner todos los unilinea ordenados primero, luego multilinea
     new_block_lines: list[str] = []
     
-    # Agregar imports unilinea ordenados
     for _, original, _ in single_line_imports:
         new_block_lines.append(original)
     
-    # Agregar imports multilinea (preservados tal cual)
     for _, content in multiline_imports:
-        # Separar en líneas y agregar
         for ml_line in content.split("\n"):
             new_block_lines.append(ml_line)
     
-    # Agregar línea vacía al final del bloque
     new_block_lines.append("")
     
-    # Verificar si hubo cambios
     original_block = [lines[j] for j in range(start, end) if lines[j].strip() != ""]
     new_block_clean = [l for l in new_block_lines if l.strip() != ""]
     
     if original_block == new_block_clean:
         return False
     
-    # Reconstruir archivo
     new_lines = lines[:start] + new_block_lines + lines[end:]
     path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8", newline="\n")
     return True
 
 
-def normalize_import_order(repo_root: Path) -> list[str]:
-    """Normaliza el orden de imports en todos los archivos .py."""
-    fixed: list[str] = []
+def ensure_path_docstring_for_file(path: Path, rel: str) -> bool:
+    """Asegura que el archivo tenga el docstring de Path al inicio."""
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    text = text.replace("\ufeff", "").replace("ï»¿", "")
+    expected = f'"""\nPath: {rel}\n"""'
+
+    def strip_one_leading_docstring(payload: str) -> tuple[str, str]:
+        s = payload.lstrip()
+        if not (s.startswith('"""') or s.startswith("'''")):
+            return payload, ""
+        quote = s[:3]
+        end = s.find(quote, 3)
+        if end == -1:
+            return payload, ""
+        header = s[3:end]
+        remainder = s[end + 3:]
+        return remainder, header
+
+    remainder, _first_header = strip_one_leading_docstring(text)
+    if remainder == text:
+        remainder = text
+    rem2, second_header = strip_one_leading_docstring(remainder)
+    if rem2 != remainder and "Path:" in second_header:
+        remainder = rem2
+
+    new_text = expected + "\n\n" + remainder.lstrip("\n")
+    if new_text != text:
+        path.write_text(new_text, encoding="utf-8", newline="\n")
+        return True
+    return False
+
+
+def get_used_names(tree: ast.AST) -> set[str]:
+    """Extrae todos los nombres usados en el código (no en imports)."""
+    used: set[str] = set()
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            used.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            if isinstance(node.value, ast.Name):
+                used.add(node.value.id)
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name):
+                used.add(node.value.id)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                used.add(node.func.id)
+    
+    return used
+
+
+def extract_import_info(tree: ast.AST) -> list[tuple[ast.Import | ast.ImportFrom, list[str]]]:
+    """Extrae imports y los nombres que importan.
+    
+    NOTA: Los imports de __future__ se detectan pero deben preservarse
+    (son directives del compilador, no crean nombres usables).
+    """
+    imports_info = []
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [alias.name.split('.')[0] for alias in node.names]
+            imports_info.append((node, names))
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            # Preservar TODOS los imports de __future__
+            if module == "__future__":
+                continue  # No incluir en la lista de imports a verificar
+            names = [alias.asname or alias.name for alias in node.names]
+            imports_info.append((node, names))
+    
+    return imports_info
+
+
+def remove_unused_imports(repo_root: Path) -> dict[str, list[str]]:
+    """Elimina imports no usados en todo el proyecto."""
+    results: dict[str, list[str]] = {}
+    
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        if normalize_import_order_for_file(path):
-            fixed.append(str(path.relative_to(repo_root)))
-    return fixed
-
-
-def ensure_gitignore_tmp(repo_root: Path) -> bool:
-    """Agrega .tmp/ a .gitignore si falta."""
-    path = repo_root / ".gitignore"
-    if not path.exists():
-        return False
-    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    if any(x.strip() == ".tmp/" for x in lines):
-        return False
-    if lines and lines[-1].strip() != "":
-        lines.append("")
-    lines.append(".tmp/")
-    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
-    return True
-
-
-def ensure_gitkeep_files(repo_root: Path) -> list[str]:
-    """Crea .gitkeep en directorios vacíos que no lo tengan."""
-    gitkeep_dirs = [
-        "src/entities",
-        "src/use_cases",
-        "src/interface_adapters/presenters",
-        "src/interface_adapters/gateways",
-        "docs",
-        "tests",
-    ]
-    created: list[str] = []
-    for d in gitkeep_dirs:
-        # Solo crear .gitkeep si el directorio está vacío
-        if dir_is_empty(repo_root, d):
-            gitkeep_path = repo_root / d / ".gitkeep"
-            if not gitkeep_path.exists():
-                gitkeep_path.parent.mkdir(parents=True, exist_ok=True)
-                gitkeep_path.write_text("", encoding="utf-8", newline="\n")
-                created.append(f"{d}/.gitkeep")
-    return created
-
-
-def ensure_init_files(repo_root: Path) -> list[str]:
-    """Crea __init__.py faltantes en src/."""
-    created: list[str] = []
-    for d in src_dirs(repo_root):
-        if d.name == "__pycache__":
+        
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            tree = ast.parse(text)
+        except SyntaxError:
             continue
-        if d.name == "data":
+        
+        used_names = get_used_names(tree)
+        imports_info = extract_import_info(tree)
+        
+        unused_imports: list[ast.Import | ast.ImportFrom] = []
+        removed_names: list[str] = []
+        
+        for import_node, imported_names in imports_info:
+            any_used = any(name in used_names or name == '*' for name in imported_names)
+            if not any_used:
+                unused_imports.append(import_node)
+                removed_names.extend(imported_names)
+        
+        if not unused_imports:
             continue
-        init_file = d / "__init__.py"
-        if not init_file.exists():
-            init_file.write_text("", encoding="utf-8", newline="\n")
-            created.append(str(init_file.relative_to(repo_root)))
-    return created
+        
+        lines = text.splitlines()
+        lines_to_remove: set[int] = set()
+        
+        for node in unused_imports:
+            if hasattr(node, 'lineno') and hasattr(node, 'end_lineno'):
+                for i in range(node.lineno - 1, node.end_lineno):
+                    lines_to_remove.add(i)
+            elif hasattr(node, 'lineno'):
+                lines_to_remove.add(node.lineno - 1)
+        
+        new_lines = [line for i, line in enumerate(lines) if i not in lines_to_remove]
+        
+        if len(new_lines) != len(lines):
+            path.write_text('\n'.join(new_lines) + ('\n' if text.endswith('\n') else ''), 
+                           encoding="utf-8", newline="\n")
+            results[str(path.relative_to(repo_root))] = removed_names
+    
+    return results
 
 
 def archive_completed_tasks(repo_root: Path) -> tuple[int, bool]:
-    """Mueve tareas completadas [x] de todo.md a todo.done.md.
-    
-    Returns:
-        (num_tasks_moved, success)
-    """
+    """Mueve tareas completadas [x] de todo.md a todo.done.md."""
     todo_path = repo_root / "docs" / "todo.md"
     done_path = repo_root / "docs" / "todo.done.md"
     
@@ -377,13 +562,11 @@ def archive_completed_tasks(repo_root: Path) -> tuple[int, bool]:
     content = todo_path.read_text(encoding="utf-8", errors="ignore")
     lines = content.splitlines()
     
-    # Separar líneas completadas [x] de pendientes [ ] o sin checkbox
     completed_lines: list[str] = []
     pending_lines: list[str] = []
     
     for line in lines:
         stripped = line.strip()
-        # Detectar líneas con checkbox completado [x] o [X]
         if re.match(r"^\s*-\s*\[[xX]\]", stripped):
             completed_lines.append(line)
         else:
@@ -392,13 +575,9 @@ def archive_completed_tasks(repo_root: Path) -> tuple[int, bool]:
     if not completed_lines:
         return 0, True
     
-    # Escribir todo.md con solo tareas pendientes
     todo_path.write_text("\n".join(pending_lines).rstrip() + "\n", encoding="utf-8", newline="\n")
     
-    # Preparar contenido para todo.done.md
-    from datetime import datetime
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     done_header = f"""# Tareas Completadas (`docs/todo.done.md`)
 
 Archivo generado automaticamente. Tareas movidas desde `docs/todo.md`.
@@ -409,15 +588,9 @@ Archivo generado automaticamente. Tareas movidas desde `docs/todo.md`.
     
     done_content = "\n".join(completed_lines) + "\n"
     
-    # Append a todo.done.md (o crear si no existe)
     if done_path.exists():
         existing = done_path.read_text(encoding="utf-8", errors="ignore").rstrip()
-        # Insertar nuevo bloque después del header existente o al final
-        if "## Archivado:" in existing:
-            # Buscar última sección de archivado y agregar después
-            new_done = existing + "\n\n## Archivado: " + timestamp + "\n\n" + done_content
-        else:
-            new_done = existing + "\n\n## Archivado: " + timestamp + "\n\n" + done_content
+        new_done = existing + "\n\n## Archivado: " + timestamp + "\n\n" + done_content
         done_path.write_text(new_done, encoding="utf-8", newline="\n")
     else:
         done_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,184 +599,89 @@ Archivo generado automaticamente. Tareas movidas desde `docs/todo.md`.
     return len(completed_lines), True
 
 
-def update_todo_md(repo_root: Path, violations: list[str]) -> bool:
-    """Actualiza docs/todo.md consolidando bootstrap (0a) y estructura (1a)."""
-    todo_path = repo_root / "docs" / "todo.md"
-    
-    # Primero, archivar tareas completadas
-    archive_completed_tasks(repo_root)
-    
-    # Leer o crear archivo base
-    if todo_path.exists():
-        content = todo_path.read_text(encoding="utf-8", errors="ignore")
-    else:
-        todo_path.parent.mkdir(parents=True, exist_ok=True)
-        content = """# Agenda de Tareas Backend (`docs/todo.md`)
-
-Documento de compatibilidad.
-
-La fuente operativa vigente es `docs/roadmap/todo.md`.
-
-- Backlog activo: ver `docs/roadmap/todo.md`.
-- Historial de ejecucion: ver `docs/roadmap/todo.done.md`.
-- Ultima sincronizacion de alias: `2026-03-14`.
-
-<!-- project-structure:auto:start -->
-<!-- project-structure:auto:end -->
-"""
-    
-    # Preparar sección de estructura
-    if violations:
-        structure_section = "### Estructura - Layout y Python File Policy (1a)\n"
-        for v in violations:
-            structure_section += f"- [ ] [structure-policy] Resolver: `{v}`.\n"
-    else:
-        structure_section = "### Estructura - Layout y Python File Policy (1a)\n- [x] [structure-policy] Estructura completa.\n"
-    
-    # Actualizar o insertar sección
-    pattern = r"(<!-- project-structure:auto:start -->)[\s\S]*?(<!-- project-structure:auto:end -->)"
-    
-    if re.search(pattern, content):
-        # Usar función lambda para evitar problemas con backslashes en el contenido
-        def replacer(m):
-            return m.group(1) + "\n## Project Structure Gate (autogenerado)\n\n" + structure_section + m.group(2)
-        new_content = re.sub(pattern, replacer, content)
-    else:
-        new_content = content.rstrip() + f"\n\n<!-- project-structure:auto:start -->\n## Project Structure Gate (autogenerado)\n\n{structure_section}<!-- project-structure:auto:end -->\n"
-    
-    if new_content != content:
-        todo_path.write_text(new_content, encoding="utf-8", newline="\n")
-        return True
-    return False
-
-
-def run_audit_check(repo_root: Path) -> list[str]:
-    """Ejecuta verificación rápida de violaciones de estructura."""
-    violations: list[str] = []
-    
-    # Gitkeep check
-    gitkeep_dirs = [
-        "src/entities", "src/use_cases",
-        "src/interface_adapters/presenters", "src/interface_adapters/gateways",
-        "docs", "tests"
-    ]
-    for d in gitkeep_dirs:
-        if not (repo_root / d / ".gitkeep").is_file():
-            violations.append(f"missing_gitkeep:{d}/.gitkeep")
-    
-    # Init files check
-    for d in src_dirs(repo_root):
-        if d.name == "__pycache__":
-            continue
-        if d.name == "data":
-            continue
-        init_file = d / "__init__.py"
-        if not init_file.exists():
-            violations.append(f"missing_init:{str(d.relative_to(repo_root))}")
-    
-    # Non-empty init check
-    for path in py_files_under_src(repo_root):
-        if path.name != "__init__.py":
-            continue
-        if path.read_text(encoding="utf-8", errors="ignore").strip() != "":
-            violations.append(f"non_empty_init:{str(path.relative_to(repo_root))}")
-    
-    # Path docstring check
-    for path in py_files_under_src(repo_root):
-        if path.name == "__init__.py":
-            continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
-        text = path.read_text(encoding="utf-8", errors="ignore").lstrip()
-        if not (text.startswith('"""') or text.startswith("'''")):
-            violations.append(f"{rel}:missing_path_docstring")
-            continue
-        quote = text[:3]
-        end = text.find(quote, 3)
-        if end == -1:
-            violations.append(f"{rel}:unclosed_docstring")
-            continue
-        header = text[3:end]
-        if f"Path: {rel}" not in header:
-            violations.append(f"{rel}:path_mismatch")
-    
-    # Import order check
-    for path in py_files_under_src(repo_root):
-        if path.name == "__init__.py":
-            continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-        import_lines = []
-        for ln in lines:
-            s = ln.strip()
-            if not s:
-                continue
-            if s.startswith("import ") or s.startswith("from "):
-                import_lines.append(s)
-        ranks = [import_rank(x) for x in import_lines]
-        if any(r == 5 for r in ranks):
-            violations.append(f"{rel}:unknown_src_import_group")
-            continue
-        if any(ranks[i] > ranks[i + 1] for i in range(len(ranks) - 1)):
-            violations.append(f"{rel}:import_order_invalid")
-    
-    # Gitignore check
-    gitignore_path = repo_root / ".gitignore"
-    if gitignore_path.exists():
-        has_tmp = False
-        for line in gitignore_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-            if line.strip() == ".tmp/":
-                has_tmp = True
-                break
-        if not has_tmp:
-            violations.append("gitignore_missing_pattern:.tmp/")
-    
-    return violations
-
+# ============================================================================
+# FLUJO PRINCIPAL REACTIVO
+# ============================================================================
 
 def run_repair(repo_root: Path, check_mode: bool = False) -> int:
-    """Ejecuta el repair de estructura."""
+    """Ejecuta el repair de estructura basado en docs/todo.md (ENFOQUE REACTIVO)."""
     
     if check_mode:
-        print("REPAIR=SKIPPED (check mode)")
-        violations = run_audit_check(repo_root)
-        for v in violations:
-            print(f"  - {v}")
+        print("REPAIR=SKIPPED (check mode - no hay modo check en enfoque reactivo)")
         return 0
     
-    # Ejecutar reparaciones
-    created_gitkeep = ensure_gitkeep_files(repo_root)
-    created_init = ensure_init_files(repo_root)
-    emptied_init = normalize_init_files(repo_root)
-    fixed_docstrings = normalize_path_docstrings(repo_root)
-    # Ordenar imports (algoritmo seguro: preserva multilinea, reordena unilinea)
-    fixed_imports = normalize_import_order(repo_root)
-    fixed_gitignore = ensure_gitignore_tmp(repo_root)
+    # 1. Leer items pendientes de docs/todo.md
+    items_by_type = parse_todo_items(repo_root)
     
-    # Archivar tareas completadas
+    # Contar items antes de reparar
+    total_items = sum(len(items) for items in items_by_type.values())
+    
+    if total_items == 0:
+        print("REPAIR=SKIPPED (no items pendientes en docs/todo.md)")
+        print("SUGERENCIA: Ejecuta primero: $1a-project-structure-gate")
+        return 0
+    
+    print(f"REPAIR_MODE=REACTIVE (basado en docs/todo.md)")
+    print(f"TOTAL_ITEMS_PENDING={total_items}")
+    
+    # 2. Ejecutar reparaciones por tipo
+    all_results = {}
+    
+    # Layout/Bootstrap
+    layout_items = items_by_type.get("layout-policy", []) + items_by_type.get("bootstrap-policy", [])
+    if layout_items:
+        print(f"\n[1/3] Reparando {len(layout_items)} items de layout/bootstrap...")
+        layout_results = repair_layout_policy(repo_root, layout_items)
+        all_results["layout"] = layout_results
+        print(f"  - Gitkeep creados: {len(layout_results['created_gitkeep'])}")
+        print(f"  - Directorios creados: {len(layout_results['created_dirs'])}")
+    
+    # ENV
+    env_items = items_by_type.get("env-policy", [])
+    if env_items:
+        print(f"\n[2/3] Reparando {len(env_items)} items de env-policy...")
+        env_results = repair_env_policy(repo_root, env_items)
+        all_results["env"] = env_results
+        print(f"  - Agregados a .env.example: {env_results['added_to_example']}")
+        print(f"  - Agregados a .env: {env_results['added_to_env']}")
+    
+    # Python file policy
+    python_items = items_by_type.get("python-file-policy", [])
+    if python_items:
+        print(f"\n[3/3] Reparando {len(python_items)} items de python-file-policy...")
+        python_results = repair_python_file_policy(repo_root, python_items)
+        all_results["python"] = python_results
+        print(f"  - Imports ordenados: {len(python_results['fixed_imports'])}")
+        print(f"  - Docstrings arreglados: {len(python_results['fixed_docstrings'])}")
+        print(f"  - Imports no usados eliminados: {sum(len(v) for v in python_results['removed_unused_imports'].values())}")
+        print(f"  - __init__.py vaciados: {len(python_results['emptied_init'])}")
+    
+    # Nota: Items de arquitectura (layer-boundary, solid) NO los procesamos
+    # Son responsabilidad de skills 2b/3b
+    arch_items = (items_by_type.get("layer-boundary", []) + 
+                  items_by_type.get("solid-lite", []) + 
+                  items_by_type.get("solid-strict", []))
+    if arch_items:
+        print(f"\n[!] {len(arch_items)} items de arquitectura NO procesados (usar skills 2b/3b)")
+    
+    # 3. Archivar tareas completadas
     archived_count, _ = archive_completed_tasks(repo_root)
     
-    # Verificar estado posterior
-    remaining = run_audit_check(repo_root)
-    updated_todo = update_todo_md(repo_root, remaining)
-    
-    print(f"REPAIR=DONE")
-    print(f"CREATED_GITKEEP={len(created_gitkeep)}")
-    print(f"CREATED_INIT={len(created_init)}")
-    print(f"EMPTIED_INIT={len(emptied_init)}")
-    print(f"FIXED_DOCSTRINGS={len(fixed_docstrings)}")
-    print(f"FIXED_IMPORTS={len(fixed_imports)}")
-    print(f"FIXED_GITIGNORE={fixed_gitignore}")
+    # 4. Reporte final
+    print(f"\n{'='*50}")
+    print("REPAIR=DONE")
     print(f"ARCHIVED_TASKS={archived_count}")
-    print(f"UPDATED_TODO_MD={updated_todo}")
-    print(f"REMAINING_VIOLATIONS={len(remaining)}")
+    print(f"NOTA: Re-ejecuta $1a-project-structure-gate para verificar estado")
     
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Repair de estructura")
+    parser = argparse.ArgumentParser(
+        description="Repair de estructura - ENFOQUE REACTIVO (lee docs/todo.md)"
+    )
     parser.add_argument("--repo-root", required=True, help="Ruta raiz del repositorio")
-    parser.add_argument("--check", action="store_true", help="Modo check (solo reportar)")
+    parser.add_argument("--check", action="store_true", help="[DEPRECATED] Use 1a para check")
     args = parser.parse_args()
     
     repo_root = Path(args.repo_root)
