@@ -7,8 +7,15 @@ import datetime as dt
 import fnmatch
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict
+
+# Importar utilidades compartidas
+SCRIPT_DIR = Path(__file__).parent.resolve()
+sys.path.insert(0, str(SCRIPT_DIR.parent.parent.parent / "shared"))
+
+from audit_utils import py_files, relative_to_repo, src_dirs
 
 
 DIRS = [
@@ -208,18 +215,10 @@ def validate_layout_policy(repo_root: Path) -> Dict[str, object]:
     }
 
 
-def src_dirs(repo_root: Path) -> list[Path]:
-    root = repo_root / "src"
-    if not root.is_dir():
-        return []
-    return sorted([p for p in root.rglob("*") if p.is_dir()] + [root])
-
-
 def py_files_under_src(repo_root: Path) -> list[Path]:
+    """Wrapper around shared py_files para mantener compatibilidad."""
     root = repo_root / "src"
-    if not root.is_dir():
-        return []
-    return sorted([p for p in root.rglob("*.py") if p.is_file()])
+    return py_files(root, exclude_init=False)
 
 
 def ensure_init_files(repo_root: Path, force: bool, check_mode: bool) -> tuple[list[str], list[str]]:
@@ -317,7 +316,7 @@ def normalize_path_docstrings(repo_root: Path) -> list[str]:
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         if ensure_path_docstring_for_file(path, rel):
             fixed.append(str(path.relative_to(repo_root)))
     return fixed
@@ -328,7 +327,7 @@ def validate_path_docstring(repo_root: Path) -> list[str]:
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         text = path.read_text(encoding="utf-8", errors="ignore").lstrip()
         if not (text.startswith('"""') or text.startswith("'''")):
             violations.append(f"{rel}:missing_path_docstring")
@@ -364,7 +363,7 @@ def validate_import_order(repo_root: Path) -> list[str]:
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         import_lines = []
         for ln in lines:
@@ -525,7 +524,7 @@ def validate_no_dataclass(repo_root: Path) -> list[str]:
     """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         filename = path.name
         
         # Determinar capa
@@ -589,7 +588,7 @@ def validate_layer_boundary(repo_root: Path) -> Dict[str, object]:
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         imports = extract_import_lines(path)
 
         in_entities = rel.startswith("src/entities/")
@@ -829,7 +828,7 @@ def validate_solid_lite(repo_root: Path, thresholds: Dict[str, int]) -> Dict[str
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         try:
             source = path.read_text(encoding="utf-8", errors="ignore")
             tree = ast.parse(source)
@@ -995,7 +994,7 @@ def validate_solid_strict(repo_root: Path, thresholds: Dict[str, int]) -> Dict[s
     for path in py_files_under_src(repo_root):
         if path.name == "__init__.py":
             continue
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         try:
             source = path.read_text(encoding="utf-8", errors="ignore")
             tree = ast.parse(source)
@@ -1340,10 +1339,12 @@ def validate_exports_consistency(repo_root: Path) -> list[str]:
     """R1.1: Valida que los nombres en __all__ estén definidos o importados.
     
     Detecta exports inconsistentes: __all__ declara 'X' pero no existe en el archivo.
+    Violaciones:
+    - export_not_found: Nombre en __all__ que no está definido ni importado
     """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
             tree = ast.parse(text)
@@ -1360,7 +1361,7 @@ def validate_exports_consistency(repo_root: Path) -> list[str]:
         
         for export in all_exports:
             if export not in available:
-                violations.append(f"{rel}:inconsistent_export:__all__ declares '{export}' but not defined or imported")
+                violations.append(f"{rel}:export_not_found:'{export}' en __all__ pero no está definido ni importado")
     
     return violations
 
@@ -1369,12 +1370,14 @@ def validate_reexport_pattern(repo_root: Path) -> list[str]:
     """R1.3: Valida patrones de re-export correctos.
     
     Detecta:
-    - Archivos que solo re-exportan pero no importan lo que declaran en __all__
-    - __all__ vacío o con elementos que no son re-exportados
+    - empty_export: __all__ = [] (vacío)
+    - broken_reexport: Elemento en __all__ que no está importado (debe ser re-export)
+    
+    Un re-export válido requiere: `from .submodule import X` + `__all__ = ["X"]`
     """
     violations: list[str] = []
     for path in py_files_under_src(repo_root):
-        rel = str(path.relative_to(repo_root)).replace("\\", "/")
+        rel = relative_to_repo(path, repo_root)
         try:
             text = path.read_text(encoding="utf-8", errors="ignore")
             tree = ast.parse(text)
@@ -1387,7 +1390,7 @@ def validate_reexport_pattern(repo_root: Path) -> list[str]:
         
         # Si tiene __all__ pero está vacío, es un problema
         if len(all_exports) == 0:
-            violations.append(f"{rel}:empty_export:__all__ is empty")
+            violations.append(f"{rel}:empty_export:__all__ está vacío ([])")
             continue
         
         # Verificar que los elementos de __all__ sean importados (re-export)
@@ -1398,11 +1401,14 @@ def validate_reexport_pattern(repo_root: Path) -> list[str]:
             # Si está importado, es un re-export válido
             if export in imported:
                 continue
-            # Si está definido en el archivo, también es válido
+            # Si está definido en el archivo, también es válido (definición local)
             if export in defined:
                 continue
             # Si no está ni importado ni definido, es un re-export roto
-            violations.append(f"{rel}:broken_reexport:'{export}' in __all__ but not imported from submodule")
+            violations.append(
+                f"{rel}:broken_reexport:'{export}' en __all__ pero no importado. "
+                f"Agregar: from .submodule import {export}"
+            )
     
     return violations
 

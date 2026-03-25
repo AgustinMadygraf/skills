@@ -2,17 +2,22 @@
 """
 Path: 3a-solid-gate/scripts/solid_gate.py
 SOLID Gate - Valida principios SOLID-lite: SRP, DIP, ISP.
+
+Usa shared/audit_utils para utilidades comunes.
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import json
+import sys
 from pathlib import Path
-from typing import Dict, List
 
-TODO_START = "<!-- 3a-solid-gate:auto:start -->"
-TODO_END = "<!-- 3a-solid-gate:auto:end -->"
+# Agregar shared/ al path para importar audit_utils
+SKILL_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(SKILL_ROOT / "shared"))
+
+from audit_utils import Finding, ReportBuilder, TodoWriter, parse_ast, py_files, relative_to_repo
 
 # Umbrales default (lite)
 DEFAULT_THRESHOLDS = {
@@ -32,192 +37,161 @@ STRICT_THRESHOLDS = {
 }
 
 
-def py_files(root: Path) -> list[Path]:
-    if not root.is_dir():
-        return []
-    return sorted([p for p in root.rglob("*.py") if p.is_file() and p.name != "__init__.py"])
+STDlib_MODULES = {"typing", "abc", "dataclasses", "enum", "json", "pathlib"}
 
 
-def parse_ast(path: Path) -> ast.AST | None:
-    try:
-        return ast.parse(path.read_text(encoding="utf-8", errors="ignore"))
-    except SyntaxError:
-        return None
-
-
-def audit_solid(repo_root: Path, profile: str = "lite") -> Dict[str, object]:
-    findings: list[Dict[str, object]] = []
+def audit_solid(repo_root: Path, profile: str = "lite") -> dict[str, object]:
+    """
+    Audita principios SOLID en el código.
+    
+    Args:
+        repo_root: Raíz del repositorio
+        profile: "lite" o "strict"
+    
+    Returns:
+        Dict con el reporte completo
+    """
     src_root = repo_root / "src"
     
-    thresholds = STRICT_THRESHOLDS if profile == "strict" else DEFAULT_THRESHOLDS
-    
     if not src_root.exists():
-        return {
-            "ok": True,
-            "critical_total": 0,
-            "warning_total": 0,
-            "info_total": 0,
-            "findings": [],
-            "violations": [],
-        }
+        return ReportBuilder().build().to_dict()
+    
+    thresholds = STRICT_THRESHOLDS if profile == "strict" else DEFAULT_THRESHOLDS
+    builder = ReportBuilder()
     
     # SRP: Analizar use_cases
     use_cases_root = src_root / "use_cases"
     if use_cases_root.exists():
-        for path in py_files(use_cases_root):
-            rel = str(path.relative_to(repo_root)).replace("\\", "/")
-            tree = parse_ast(path)
-            if tree is None:
-                continue
-            
-            classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
-            functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
-            
-            # SRP: Demasiadas clases por modulo
-            max_classes = thresholds.get("max_use_case_classes_per_module", 3)
-            if len(classes) > max_classes:
-                findings.append({
-                    "severity": "warning" if profile == "lite" else "critical",
-                    "rule": "srp_too_many_classes_per_module",
-                    "file": rel,
-                    "line": 1,
-                    "detail": f"{len(classes)} clases (max {max_classes})",
-                })
-            
-            # SRP: Demasiadas funciones top-level
-            max_funcs = thresholds.get("max_use_case_top_level_functions", 5)
-            if len(functions) > max_funcs:
-                findings.append({
-                    "severity": "warning" if profile == "lite" else "critical",
-                    "rule": "srp_too_many_top_level_functions",
-                    "file": rel,
-                    "line": 1,
-                    "detail": f"{len(functions)} funciones (max {max_funcs})",
-                })
-            
-            # ISP: Clases con demasiados metodos publicos
-            max_methods = thresholds.get("max_public_methods_per_class", 15)
-            for cls in classes:
-                public_methods = [
-                    n for n in cls.body 
-                    if isinstance(n, ast.FunctionDef) 
-                    and not n.name.startswith("_")
-                ]
-                if len(public_methods) > max_methods:
-                    findings.append({
-                        "severity": "warning" if profile == "lite" else "critical",
-                        "rule": "isp_too_many_public_methods",
-                        "file": rel,
-                        "line": cls.lineno,
-                        "detail": f"{cls.name} tiene {len(public_methods)} metodos publicos (max {max_methods})",
-                    })
+        _audit_use_cases(builder, use_cases_root, repo_root, thresholds, profile)
     
     # ISP: Analizar gateways
     gateways_root = src_root / "interface_adapters" / "gateways"
     if gateways_root.exists():
-        for path in py_files(gateways_root):
-            rel = str(path.relative_to(repo_root)).replace("\\", "/")
-            tree = parse_ast(path)
-            if tree is None:
-                continue
-            
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    public_methods = [
-                        n for n in node.body 
-                        if isinstance(n, ast.FunctionDef) 
-                        and not n.name.startswith("_")
-                    ]
-                    max_methods = thresholds.get("max_gateway_public_methods", 10)
-                    if len(public_methods) > max_methods:
-                        findings.append({
-                            "severity": "warning" if profile == "lite" else "critical",
-                            "rule": "isp_gateway_too_large",
-                            "file": rel,
-                            "line": node.lineno,
-                            "detail": f"{node.name} tiene {len(public_methods)} metodos publicos (max {max_methods})",
-                        })
+        _audit_gateways(builder, gateways_root, repo_root, thresholds)
     
     # DIP: Detectar imports de vendors en capas internas
-    internal_layers = [src_root / "entities", src_root / "use_cases"]
-    for layer_root in internal_layers:
-        if not layer_root.exists():
+    for layer in ["entities", "use_cases"]:
+        layer_root = src_root / layer
+        if layer_root.exists():
+            _audit_vendor_imports(builder, layer_root, repo_root)
+    
+    return builder.build().to_dict()
+
+
+def _audit_use_cases(
+    builder: ReportBuilder,
+    use_cases_root: Path,
+    repo_root: Path,
+    thresholds: dict,
+    profile: str,
+) -> None:
+    """Audita reglas SRP en use_cases."""
+    max_classes = thresholds.get("max_use_case_classes_per_module", 3)
+    max_funcs = thresholds.get("max_use_case_top_level_functions", 5)
+    max_methods = thresholds.get("max_public_methods_per_class", 15)
+    severity = "critical" if profile == "strict" else "warning"
+    
+    for path in py_files(use_cases_root):
+        rel = relative_to_repo(path, repo_root)
+        tree = parse_ast(path)
+        if tree is None:
             continue
-        for path in py_files(layer_root):
-            rel = str(path.relative_to(repo_root)).replace("\\", "/")
-            tree = parse_ast(path)
-            if tree is None:
-                continue
-            
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom):
-                    module = node.module or ""
-                    # Import de vendor/externo en capa interna
-                    if module and not module.startswith("src."):
-                        # Excluir stdlib
-                        first_part = module.split(".")[0]
-                        if first_part not in ["typing", "abc", "dataclasses", "enum", "json", "pathlib"]:
-                            findings.append({
-                                "severity": "warning",
-                                "rule": "dip_vendor_import_in_internal_layer",
-                                "file": rel,
-                                "line": node.lineno,
-                                "detail": module,
-                            })
-    
-    critical = [f for f in findings if f["severity"] == "critical"]
-    warnings = [f for f in findings if f["severity"] == "warning"]
-    infos = [f for f in findings if f["severity"] == "info"]
-    
-    return {
-        "ok": len(critical) == 0,
-        "critical_total": len(critical),
-        "warning_total": len(warnings),
-        "info_total": len(infos),
-        "findings": findings,
-        "violations": [f"{x['file']}:{x['line']}:{x['rule']}" for x in findings],
-    }
-
-
-def update_todo(repo_root: Path, report: Dict[str, object]) -> Path:
-    docs = repo_root / "docs"
-    docs.mkdir(parents=True, exist_ok=True)
-    todo = docs / "todo.md"
-    
-    lines = [
-        TODO_START,
-        "## 3a-SOLID Gate (autogenerado)",
-        "",
-    ]
-    
-    findings = report.get("findings", [])
-    if findings:
-        for f in findings:
-            lines.append(
-                f"- [ ] [solid:{f['severity']}] `{f['rule']}` en `{f['file']}:{f['line']}`."
+        
+        classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
+        functions = [n for n in tree.body if isinstance(n, ast.FunctionDef)]
+        
+        # SRP: Demasiadas clases por modulo
+        if len(classes) > max_classes:
+            builder.add_finding(
+                severity=severity,
+                rule="srp_too_many_classes_per_module",
+                file=rel,
+                line=classes[max_classes].lineno if len(classes) > max_classes else 1,
+                detail=f"{len(classes)} clases (max {max_classes})",
             )
-    else:
-        lines.append("- [ ] Sin hallazgos de solid-gate.")
+        
+        # SRP: Demasiadas funciones top-level
+        if len(functions) > max_funcs:
+            builder.add_finding(
+                severity=severity,
+                rule="srp_too_many_top_level_functions",
+                file=rel,
+                line=functions[max_funcs].lineno if len(functions) > max_funcs else 1,
+                detail=f"{len(functions)} funciones (max {max_funcs})",
+            )
+        
+        # ISP: Clases con demasiados métodos públicos
+        for cls in classes:
+            public_methods = [
+                n for n in cls.body
+                if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+            ]
+            if len(public_methods) > max_methods:
+                builder.add_finding(
+                    severity=severity,
+                    rule="isp_too_many_public_methods",
+                    file=rel,
+                    line=cls.lineno,
+                    detail=f"{cls.name} tiene {len(public_methods)} metodos publicos (max {max_methods})",
+                )
+
+
+def _audit_gateways(
+    builder: ReportBuilder,
+    gateways_root: Path,
+    repo_root: Path,
+    thresholds: dict,
+) -> None:
+    """Audita reglas ISP en gateways."""
+    max_methods = thresholds.get("max_gateway_public_methods", 10)
     
-    lines.append(TODO_END)
-    block = "\n".join(lines) + "\n"
-    
-    if not todo.exists():
-        todo.write_text("# TODO\n\n" + block, encoding="utf-8", newline="\n")
-        return todo
-    
-    content = todo.read_text(encoding="utf-8", errors="ignore")
-    s = content.find(TODO_START)
-    e = content.find(TODO_END)
-    
-    if s != -1 and e != -1 and e >= s:
-        e = e + len(TODO_END)
-        new_content = content[:s].rstrip() + "\n\n" + block + content[e:].lstrip("\n")
-    else:
-        new_content = content.rstrip() + "\n\n" + block
-    
-    todo.write_text(new_content, encoding="utf-8", newline="\n")
-    return todo
+    for path in py_files(gateways_root):
+        rel = relative_to_repo(path, repo_root)
+        tree = parse_ast(path)
+        if tree is None:
+            continue
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                public_methods = [
+                    n for n in node.body
+                    if isinstance(n, ast.FunctionDef) and not n.name.startswith("_")
+                ]
+                if len(public_methods) > max_methods:
+                    builder.add_finding(
+                        severity="warning",
+                        rule="isp_gateway_too_large",
+                        file=rel,
+                        line=node.lineno,
+                        detail=f"{node.name} tiene {len(public_methods)} metodos publicos (max {max_methods})",
+                    )
+
+
+def _audit_vendor_imports(
+    builder: ReportBuilder,
+    layer_root: Path,
+    repo_root: Path,
+) -> None:
+    """Audita reglas DIP: vendor imports en capas internas."""
+    for path in py_files(layer_root):
+        rel = relative_to_repo(path, repo_root)
+        tree = parse_ast(path)
+        if tree is None:
+            continue
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module and not module.startswith("src."):
+                    first_part = module.split(".")[0]
+                    if first_part not in STDlib_MODULES:
+                        builder.add_finding(
+                            severity="warning",
+                            rule="dip_vendor_import_in_internal_layer",
+                            file=rel,
+                            line=node.lineno,
+                            detail=module,
+                        )
 
 
 def main() -> int:
@@ -229,23 +203,33 @@ def main() -> int:
     args = parser.parse_args()
     
     repo_root = Path(args.repo_root).resolve()
-    report = audit_solid(repo_root, args.solid_profile)
-    todo_path = update_todo(repo_root, report)
+    report_dict = audit_solid(repo_root, args.solid_profile)
     
+    # Escribir en docs/todo.md
+    writer = TodoWriter(repo_root, "3a-solid-gate")
+    findings = [Finding(**f) for f in report_dict.get("findings", [])]
+    todo_path = writer.write_findings(
+        findings,
+        title="3a-SOLID Gate",
+        empty_message="Sin hallazgos de solid-gate.",
+    )
+    
+    # Output
     out = {
         "repo_root": str(repo_root),
         "todo_path": str(todo_path),
         "profile": args.solid_profile,
-        **report,
+        **report_dict,
     }
     
     if args.json:
         print(json.dumps(out, ensure_ascii=False))
     else:
-        print(f"3A_SOLID_GATE={'PASS' if report['ok'] else 'FAIL'}")
+        ok = report_dict.get("ok", True)
+        print(f"3A_SOLID_GATE={'PASS' if ok else 'FAIL'}")
         print(f"TODO={todo_path}")
     
-    return 0 if report["ok"] else 2
+    return 0 if report_dict.get("ok", True) else 2
 
 
 if __name__ == "__main__":
